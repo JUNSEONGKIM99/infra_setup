@@ -269,15 +269,7 @@ GPU 메모리 부족 시 `GPU_MEMORY_UTILIZATION` 값을 낮추거나 `MAX_MODEL
 ### SSL 인증서 갱신 실패
 Certbot 로그를 확인하고 도메인 DNS 설정 및 포트 80/443 접근성을 확인하세요.
 
-## 기여
-
-이 프로젝트는 AIBIZ Co., Ltd.에서 관리합니다.
-
-## 라이선스
-
-사내 프로젝트
-
 ## 연락처
 
-- Author: jslee
-- GitLab: https://gitlab.ai-biz.net/jslee/infra_setup
+- Author: jskim
+- Email: junseong.kim.ecd@gmali.com
