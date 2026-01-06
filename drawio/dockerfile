@@ -1,0 +1,16 @@
+# 이미지 생성
+FROM jgraph/drawio:26.0.4
+#USER root
+
+# 기존 ubuntu(1000):ubuntu(1000)을 2000:2000로 변경
+#RUN usermod -u 2000로 ubuntu
+#RUN groupmod -g 2000로 ubuntu
+
+# 기존 tomcat(1001):tomcat(999)을 1000:1000로 변경
+#RUN usermod -u 1000 tomcat
+#RUN groupmod -g 1000 tomcat
+
+#RUN chown -R tomcat:tomcat /usr/local/tomcat;
+
+# tomcat 사용자로 실행
+#USER tomcat

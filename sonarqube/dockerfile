@@ -1,0 +1,5 @@
+# 이미지 생성
+FROM sonarqube:10.7.0-community
+#9.9.1-community
+#25.1.0.102122-community
+#USER root

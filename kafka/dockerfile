@@ -1,0 +1,8 @@
+FROM bitnami/kafka:4.0.0
+USER root
+RUN echo "aibiz:x:1000:1000::/home/aibiz:/bin/sh" >> /etc/passwd
+RUN echo "aibiz:x:1000:" >> /etc/group
+RUN mkdir -p /home/aibiz
+RUN chown -R aibiz:aibiz /home/aibiz
+RUN chown -R aibiz:aibiz /opt/bitnami
+USER aibiz

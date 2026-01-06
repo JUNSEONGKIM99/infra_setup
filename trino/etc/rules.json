@@ -1,0 +1,33 @@
+{
+    "catalogs": [
+        {
+            "catalog": "system",
+            "allow": true
+        },
+        {
+            "user": "aibiz",
+            "catalog": "delta",
+            "allow": true
+        },
+        {
+            "user": "aibiz",
+            "catalog": "postgresql",
+            "allow": true
+        },
+        {
+            "user": "aibiz",
+            "catalog": "mssql_mes_sft",
+            "allow": true
+        },
+        {
+            "user": "aibiz",
+            "catalog": "mssql_mes_sft_low",
+            "allow": true
+        },
+        {
+            "user": "aibiz",
+            "catalog": "iceberg",
+            "allow": true
+        }
+    ]
+}

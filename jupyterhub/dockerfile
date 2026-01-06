@@ -1,0 +1,18 @@
+FROM ubuntu:24.04
+USER root
+
+# 기존 ubuntu(1000):ubuntu(1000)을 aibiz:aibiz로 변경
+RUN usermod -l aibiz ubuntu
+RUN usermod -d /home/aibiz -m aibiz
+RUN groupmod -n aibiz ubuntu
+
+# 필요 패키지 설치
+RUN apt-get update && apt-get install -y curl
+RUN apt-get install -y nodejs npm ldap-utils
+RUN npm install -g configurable-http-proxy
+
+# 환경 파일 경로(마운트는 나중에 하더라도 접근권한은 지정해줘야 함)
+RUN mkdir -p /etc/jupyterhub
+RUN chown -R aibiz:aibiz /home /etc/jupyterhub
+
+USER aibiz

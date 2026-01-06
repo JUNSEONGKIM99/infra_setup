@@ -1,0 +1,4 @@
+connector.name=postgresql
+connection-url=${OLTP_JDBC_URL}
+connection-user=${OLTP_DB_USER}
+connection-password=${OLTP_DB_PASSWORD}

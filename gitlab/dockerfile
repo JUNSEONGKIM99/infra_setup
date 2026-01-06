@@ -1,0 +1,21 @@
+# 이미지 생성
+FROM gitlab/gitlab-ce:16.7.0-ce.0
+USER root
+
+# 기존 ubuntu(1000):ubuntu(1000)을 aibiz:aibiz로 변경
+#RUN usermod -l aibiz ubuntu
+#RUN usermod -d /home/aibiz -m aibiz
+#RUN groupmod -n aibiz ubuntu
+
+# 권한 설정
+#RUN chown -R aibiz:aibiz /etc/gitlab
+#RUN chown -R aibiz:aibiz /var/opt/gitlab
+#RUN chown -R aibiz:aibiz /var/log/gitlab
+#RUN chown -R aibiz:aibiz /opt/gitlab
+#RUN chown -R aibiz:aibiz /assets
+
+# 필수 패키지 설치
+#RUN apt-get update && apt-get install -y curl
+
+# aibiz 사용자로 실행
+#USER aibiz

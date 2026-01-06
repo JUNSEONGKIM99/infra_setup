@@ -1,0 +1,4 @@
+connector.name=sqlserver
+connection-url=${RAW_JDBC_URL1}
+connection-user=${RAW_DB_USER}
+connection-password=${RAW_DB_PASSWORD}

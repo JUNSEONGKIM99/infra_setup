@@ -1,0 +1,25 @@
+# 1. Use the official vLLM image (matches your version)
+# This already contains: vLLM 0.13.0, PyTorch 2.9.0, CUDA 12.9, & Drivers
+FROM vllm/vllm-openai:v0.13.0
+
+# 2. Install ONLY the missing H100 optimizations & Cache libs
+# We use --no-deps for fbgemm-gpu to prevent it from messing with the pre-installed PyTorch
+#RUN pip install \
+#    "lmcache" \
+#    "torch-c-dlpack-ext" \
+#    "torchao>=0.10.0" \
+#    "fbgemm-gpu" --index-url https://download.pytorch.org/whl/fbgemm/cu129
+
+RUN pip install "torchao==0.14.1"
+RUN pip install "fbgemm-gpu-genai" --index-url https://download.pytorch.org/whl/cu129 \
+    --extra-index-url https://pypi.org/simple
+
+# 3. Setup Environment Variables
+ENV HF_HOME=/root/.cache/huggingface
+ENV LMCACHE_DIR=/root/.cache/lmcache
+RUN mkdir -p ${LMCACHE_DIR}
+
+# 4. (Optional) If you have a custom entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

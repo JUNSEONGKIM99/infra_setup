@@ -1,0 +1,72 @@
+# from postgres 이미지 방식
+# postgres의 UID를 1000으로 변경해서 aibiz와 일치시킴
+#FROM postgres:14.15
+#USER root
+#RUN usermod -u 1000 postgres
+#RUN groupmod -g 1000 postgres
+#RUN echo "postgres:x:1000:1000::/home/postgres:/bin/sh" >> /etc/passwd
+#RUN echo "postgres:x:1000:" >> /etc/group
+#RUN mkdir -p /home/postgres
+#RUN chown -R postgres:postgres /home/postgres
+#RUN chown -R postgres:postgres /var/lib/postgresql;
+#RUN chown -R postgres:postgres /var/run/postgresql;
+#USER postgres
+
+# Base image: Ubuntu 24.04
+FROM ubuntu:24.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH="/usr/lib/postgresql/14/bin:$PATH"
+
+# Update and install essential packages
+RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
+    apt-transport-https \
+    curl \
+    software-properties-common \
+    lsb-release \
+    locales
+
+# Configure and generate en_US.UTF-8 locale
+RUN locale-gen en_US.UTF-8 && \
+    update-locale LANG=en_US.UTF-8
+
+# Add PostgreSQL APT repository
+RUN wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add - && \
+    echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
+
+# Add TimescaleDB repository
+RUN wget --quiet -O - https://packagecloud.io/timescale/timescaledb/gpgkey | apt-key add - && \
+    echo "deb https://packagecloud.io/timescale/timescaledb/ubuntu/ $(lsb_release -cs) main" > /etc/apt/sources.list.d/timescaledb.list
+
+# Update and install PostgreSQL 14 and TimescaleDB and FDW
+RUN apt-get update && apt-get install -y \
+    postgresql-14 \
+    timescaledb-2-postgresql-14 \
+    postgresql-14-tds-fdw \
+    freetds-bin
+# Set up TimescaleDB extension in PostgreSQL
+#RUN echo "shared_preload_libraries = 'timescaledb'" >> /etc/postgresql/14/main/postgresql.conf && \
+#    echo "timescaledb.telemetry_level = 'off'" >> /etc/postgresql/14/main/postgresql.conf
+
+# 기존 ubuntu(1000):ubuntu(1000)을 1001:1001로 변경
+RUN usermod -u 1001 ubuntu
+RUN groupmod -g 1001 ubuntu
+
+# 기존 postgres:postgres을 1000:1000로 변경
+RUN usermod -u 1000 postgres
+RUN groupmod -g 1000 postgres
+
+RUN chown -R postgres:postgres /var/lib/postgresql;
+RUN chown -R postgres:postgres /var/run/postgresql;
+USER postgres
+
+# Expose PostgreSQL port
+EXPOSE 5432
+
+# Start PostgreSQL server
+CMD ["postgres", "-D", "/var/lib/postgresql/data"]
+
+USER postgres

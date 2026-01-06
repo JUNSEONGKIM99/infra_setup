@@ -1,0 +1,22 @@
+concurrent = 4
+check_interval = 0
+connection_max_age = "15m0s"
+shutdown_timeout = 0
+
+[session_server]
+  session_timeout = 1800
+
+[[runners]]
+  name = "sonar"
+  url = "http://gitlab.ai-biz.net"
+  id = 11
+  token = "glrt-wQaHoYV8X_bkW1vj8uo2"
+  token_obtained_at = 2025-02-04T02:45:36Z
+  token_expires_at = 0001-01-01T00:00:00Z
+  executor = "shell"
+  [runners.custom_build_dir]
+  [runners.cache]
+    MaxUploadedArchiveSize = 0
+    [runners.cache.s3]
+    [runners.cache.gcs]
+    [runners.cache.azure]

@@ -1,0 +1,9 @@
+# UID를 1000으로 변경해서 aibiz와 일치시킴
+FROM tomcat:9.0.69-jdk17
+USER root
+RUN echo "tomcat:x:1000:1000::/home/tomcat:/bin/sh"  >> /etc/passwd
+RUN echo "tomcat:x:1000:" >> /etc/group
+RUN mkdir -p /home/tomcat
+RUN chown -R tomcat:tomcat /home/tomcat
+RUN chown -R tomcat:tomcat /usr/local/tomcat
+USER tomcat

@@ -1,0 +1,20 @@
+# UID를 1000으로 변경해서 aibiz와 일치시킴
+FROM bitnami/spark:3.5.3
+USER root
+RUN echo "spark:x:1000:1000::/home/spark:/bin/sh" >> /etc/passwd
+RUN echo "spark:x:1000:" >> /etc/group
+RUN mkdir -p /home/spark
+RUN chown -R spark:spark /home/spark
+
+# Deltalake + S3 관련 jar 다운로드
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+RUN curl -o /opt/bitnami/spark/jars/delta-core_2.12-2.4.0.jar https://repo1.maven.org/maven2/io/delta/delta-core_2.12/2.4.0/delta-core_2.12-2.4.0.jar 
+RUN curl -o /opt/bitnami/spark/jars/hadoop-aws-3.3.6.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.6/hadoop-aws-3.3.6.jar
+RUN curl -o /opt/bitnami/spark/jars/aws-java-sdk-bundle-1.12.262.jar https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar 
+RUN curl -o /opt/bitnami/spark/jars/delta-storage-2.4.0.jar https://repo1.maven.org/maven2/io/delta/delta-storage/2.4.0/delta-storage-2.4.0.jar
+RUN curl -o /opt/bitnami/spark/jars/postgresql-42.2.24.jar https://repo1.maven.org/maven2/org/postgresql/postgresql/42.2.24/postgresql-42.2.24.jar
+RUN curl -o /opt/bitnami/spark/jars/antlr4-runtime-4.9.3.jar https://repo1.maven.org/maven2/org/antlr/antlr4-runtime/4.9.3/antlr4-runtime-4.9.3.jar
+RUN curl -o /opt/bitnami/spark/jars/wildfly-openssl-1.1.3.Final.jar https://repo1.maven.org/maven2/org/wildfly/openssl/wildfly-openssl/1.1.3.Final/wildfly-openssl-1.1.3.Final.jar
+RUN curl -o /opt/bitnami/spark/jars/checker-qual-3.5.0.jar https://repo1.maven.org/maven2/org/checkerframework/checker-qual/3.5.0/checker-qual-3.5.0.jar
+RUN chown -R spark:spark /opt/bitnami
+USER spark

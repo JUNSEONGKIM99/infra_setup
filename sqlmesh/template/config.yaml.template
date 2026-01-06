@@ -1,0 +1,52 @@
+gateways:
+  delta:
+    connection:
+      type: trino
+      method: basic
+      host: trino.${SERVER_NAME}
+      port: 443
+      user: ${TRINO_USER}
+      password: ${TRINO_PASSWORD}
+      catalog: delta
+      verify: false
+    state_connection:
+      type: postgres
+      host: postgres
+      port: 5432
+      user: ${AIRFLOW_DB_USER}
+      password: ${AIRFLOW_DB_PASSWORD}
+      database: ${AIRFLOW_DB_NAME}
+  postgresql:
+    connection:
+      type: trino
+      method: basic
+      host: trino.${SERVER_NAME}
+      port: 443
+      user: ${TRINO_USER}
+      password: ${TRINO_PASSWORD}
+      catalog: postgresql
+      verify: false
+  mssql_mes_sft:
+    connection:
+      type: trino
+      method: basic
+      host: trino.${SERVER_NAME}
+      port: 443
+      user: ${TRINO_USER}
+      password: ${TRINO_PASSWORD}
+      catalog: mssql_mes_sft
+      verify: false
+  mssql_mes_sft_low:
+    connection:
+      type: trino
+      method: basic
+      host: trino.${SERVER_NAME}
+      port: 443
+      user: ${TRINO_USER}
+      password: ${TRINO_PASSWORD}
+      catalog: mssql_mes_sft_low
+      verify: false
+default_gateway: postgresql
+model_defaults:
+  dialect: trino
+  start: 2024-12-16

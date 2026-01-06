@@ -1,0 +1,6 @@
+# 이미지 생성
+FROM quay.io/minio/minio:RELEASE.2024-12-13T22-19-12Z
+USER root
+RUN echo "minio:x:1000:1000::/home/minio:/bin/sh" | cat - /etc/passwd | tee /etc/passwd
+RUN echo "minio:x:1000:" | cat - /etc/group | tee /etc/group
+USER minio

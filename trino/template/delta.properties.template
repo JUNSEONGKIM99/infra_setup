@@ -1,0 +1,11 @@
+connector.name=delta_lake
+hive.metastore.uri=${HIVE_METASTORE_URI}
+delta.security=ALLOW_ALL
+# parquet_max_read_block_size=128MB # 더 느려짐
+
+fs.native-s3.enabled=true
+s3.endpoint=${MINIO_ENDPOINT}
+s3.aws-access-key=${MINIO_ACCESS_KEY}
+s3.aws-secret-key=${MINIO_SECRET_KEY}
+s3.region=ap-northeast-2 
+s3.path-style-access=true

@@ -1,0 +1,4 @@
+FROM openjdk:17-jdk
+
+WORKDIR /app
+ENTRYPOINT ["java","-jar","/app/app.jar","-Dspring.profiles.active=test","-Dspring.config.location=/home/springboot/config/application.yml"]

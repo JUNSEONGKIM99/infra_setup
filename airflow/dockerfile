@@ -1,0 +1,12 @@
+FROM ubuntu:24.04
+USER root
+
+# 기존 ubuntu(1000):ubuntu(1000)을 aibiz:aibiz로 변경
+RUN usermod -l aibiz ubuntu
+RUN usermod -d /home/aibiz -m aibiz
+RUN groupmod -n aibiz ubuntu
+
+# 필수 패키지 설치
+RUN apt-get update && apt-get install -y curl
+# aibiz 사용자로 실행
+USER aibiz

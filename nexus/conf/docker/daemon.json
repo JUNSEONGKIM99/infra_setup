@@ -1,0 +1,10 @@
+{
+    "ipv6": false,
+    "insecure-registries": [
+        "rnd6.ai-biz.net:5000",
+        "rnd6.ai-biz.net:5001"
+    ],
+    "registry-mirrors": [
+        "http://rnd6.ai-biz.net:5000"
+    ]
+}

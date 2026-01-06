@@ -1,0 +1,1606 @@
+# ====================================================================================
+# Docker compose file for Dutchboy
+# Author  : jslee
+# Contact : AIBIZ co.,Ltd.
+# History : 
+#   - Keycloak + OpenLDAP을 통한 SSO 구축
+#     ODIC지원(portainer, airflow, minio, jupyterhub, grafana) 연동 -> extra_hosts 지정 필요
+#     minio는 기동시 depends_on을 걸어줘도 keycloak인식을 못함, 재기동하면 동작됨.
+# ====================================================================================
+
+# 공통부분
+x-extra-hosts: &extra_hosts
+    extra_hosts:
+      - "keycloak.${SERVER_NAME}:${SERVER_IP}"
+
+x-airflow-common:
+  &airflow-common
+  profiles: [prod, rnd6, airflow]
+  image: aibiz_ubuntu:24.04
+  env_file:
+    - .env
+  environment:
+    &airflow-common-env
+    AIRFLOW_HOME: /opt/airflow
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${AIRFLOW_DB_URL}"
+    AIRFLOW__CELERY__RESULT_BACKEND: "db+postgresql://${AIRFLOW_DB_URL}"
+    AIRFLOW__CELERY__BROKER_URL: redis://:@airflow-redis:6379/0
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    PATH: /usr/local/venv/base/bin:/opt/spark/bin:/usr/lib/jvm/java-8-openjdk-amd64/bin:$PATH
+    SERVER_NAME: ${SERVER_NAME}
+    KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+    # for Spark
+    JAVA_HOME: /usr/lib/jvm/java-8-openjdk-amd64
+    SPARK_HOME: /opt/spark
+    PYTHONPATH: /etc/ds_mlflow:/etc/dutchboy_system
+  volumes:
+    - ./volumes/airflow/dags:/opt/airflow/dags
+    - ./volumes/airflow/logs:/opt/airflow/logs
+    - ./volumes/airflow/config:/opt/airflow/config
+    - ./volumes/airflow/plugins:/opt/airflow/plugins
+    - ./volumes/airflow/home/aibiz:/home/aibiz
+    - ./volumes/airflow/tmp:/opt/airflow/
+    - ./airflow/config/airflow.cfg:/opt/airflow/airflow.cfg
+    - ./airflow/config/webserver_config.py:/opt/airflow/webserver_config.py
+    - /usr/local/venv/base:/usr/local/venv/base:ro
+    - /usr/bin/python:/usr/bin/python:ro
+    - /usr/bin/python3:/usr/bin/python3:ro
+    - /usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:ro
+    - /usr/lib/python3.12:/usr/lib/python3.12:ro
+    - /data/semes:/data/semes:ro
+    - /usr/local/venv/dutchboy:/usr/local/venv/dutchboy:ro
+    # for Spark
+    - /opt/spark:/opt/spark:ro
+    - /usr/lib/jvm/java-8-openjdk-amd64:/usr/lib/jvm/java-8-openjdk-amd64:ro
+    - ./spark/spark-apps:/opt/spark-apps
+    - ./spark/spark-config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+    - ./spark/spark-config/hive-site.xml:/opt/spark/conf/hive-site.xml
+    - ./spark/spark-config/core-site.xml:/opt/spark/conf/core-site.xml
+    # for MSSQL
+    - /etc/odbcinst.ini:/etc/odbcinst.ini:ro
+    - /opt/microsoft/msodbcsql18:/opt/microsoft/msodbcsql18:ro    
+    # for DS Team
+    - /home/aibiz/ds_code/ds_mlflow:/etc/ds_mlflow
+    - /home/aibiz/ds_code/dutchboy_system:/etc/dutchboy_system
+    - /data/tmp/mlflow_tmp:/data/tmp/mlflow_tmp
+    # for DE Team
+    - /home/aibiz/work:/home/aibiz
+    - /data/zipfile:/data/zipfile
+    - /usr/local/venv/pyceberg:/usr/local/venv/pyceberg:ro
+  depends_on:
+    &airflow-common-depends-on
+    airflow-redis:
+      condition: service_healthy
+  <<: *extra_hosts
+  networks:
+    - data-network
+
+services:
+  # ==================================================
+  # Nginx : Reverse proxy service
+  # ==================================================
+  nginx:
+    image: aibiz_nginx:1.27.3
+    container_name: nginx
+    profiles: [prod, rnd6, nginx]
+    restart: always
+    #extra_hosts:
+    #  - "host.docker.internal:host-gateway"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d/aibiz.https.conf:/etc/nginx/conf.d/aibiz.https.conf:ro
+      - ./nginx/conf.d/https.conf:/etc/nginx/conf.d/https.conf:ro
+      - ./nginx/conf.d/proxy.conf:/etc/nginx/conf.d/proxy.conf:ro
+      - ./volumes/certbot/conf/live/ai-biz.net/fullchain.pem:/etc/nginx/aibiz.fullchain.pem:ro
+      - ./volumes/certbot/conf/live/ai-biz.net/privkey.pem:/etc/nginx/aibiz.privkey.pem:ro
+      - ./volumes/certbot/conf/live/${SERVER_NAME}/fullchain.pem:/etc/nginx/fullchain.pem:ro
+      - ./volumes/certbot/conf/live/${SERVER_NAME}/privkey.pem:/etc/nginx/privkey.pem:ro
+      # for Semes frontend
+      - ./volumes/semes-frontend/dist:/usr/share/nginx/html/semes:ro
+    ports:
+      - ${NGINX_PORT:-80}:${NGINX_PORT:-80}
+      - ${NGINX_SSL_PORT:-443}:${NGINX_SSL_PORT:-443}
+    #depends_on:
+    #  - keycloak
+    networks:
+      - data-network
+
+  # ==================================================
+  # Certbot: Let's Encrypt service for SSL certificates
+  # 3개월에 1회만 실행하면 인증서 재발급 됨.
+  # 인증서는 ./volumes/certbot/conf/live/ 폴더에 있음
+  # ==================================================
+  certbot:
+    image: aibiz_certbot:v3.0.1
+    profiles: [every_month, certbot]
+    container_name: certbot
+    hostname: certbot
+    restart: no
+    volumes:
+      - ./volumes/certbot/conf:/etc/letsencrypt
+      - ./volumes/certbot/www:/var/www/html
+      - ./volumes/certbot/logs:/var/log/letsencrypt
+      - ./volumes/certbot/conf/live:/etc/letsencrypt/live
+      - ./certbot/cloudflare.ini:/etc/letsencrypt/cloudflare.ini
+    environment:
+     - SERVER_NAME=${SERVER_NAME}
+    command: >
+      sh -c "certbot certonly --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini
+      -d *.${SERVER_NAME} --preferred-challenges dns-01 --non-interactive
+      --force-renewal --quiet --agree-tos --email jslee@ai-biz.net; chmod -R 100:100 /etc/letsencrypt; tail -f /var/log/letsencrypt/letsencrypt.log"
+
+  # ==================================================
+  # MinIO : Object storage (Iceberg, MLflow)
+  # Erasure Coding은 최소 4개의 디스크가 필요
+  # 추가 디스크가 필요할 경우, 최소 2개씩 추가
+  # N개의 디스크 중 N/2의 디스크 장애를 허용
+  # ==================================================
+  minio:
+    image: aibiz_minio:2024-12-13T22-19-12Z
+    profiles: [prod, rnd6, minio]
+    container_name: minio
+    restart: always
+    command: server --address ":${MINIO_API_PORT:-9000}" --console-address ":${MINIO_CONSOLE_PORT:-9001}" http://minio:7078/data{1...4}
+    ports:
+      - ${MINIO_API_PORT:-9000}:${MINIO_API_PORT:-9000}
+    #  - ${MINIO_CONSOLE_PORT:-9001}:${MINIO_CONSOLE_PORT:-9001}
+    volumes:
+      - ./volumes/minio/minio1:/data1
+      - ./volumes/minio/minio2:/data2
+      - ./volumes/minio/minio3:/data3
+      - ./volumes/minio/minio4:/data4
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minio_access_key}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minio_secret_key}
+      MINIO_OPTS: "--address :${MINIO_API_PORT:-9001} --console-address :${MINIO_CONSOLE_PORT:-9001}"
+      MINIO_IDENTITY_OPENID_CONFIG_URL: "https://keycloak.${SERVER_NAME}/realms/dutchboy/.well-known/openid-configuration"
+      MINIO_IDENTITY_OPENID_CLIENT_ID: minio
+      MINIO_IDENTITY_OPENID_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      MINIO_IDENTITY_OPENID_ROLE_POLICY: consoleAdmin
+      MINIO_IDENTITY_OPENID_DISPLAY_NAME: "Singn In with keycloak"
+      MINIO_IDENTITY_OPENID_SCOPES: openid
+      MINIO_IDENTITY_OPENID_REDIRECT_URI: https://minio.${SERVER_NAME}/oauth_callback
+    healthcheck:
+      test: ["CMD", "sh", "-c", "mc alias set myminio http://localhost:${MINIO_API_PORT:-9000} ${MINIO_ACCESS_KEY:-minio_access_key} ${MINIO_SECRET_KEY:-minio_secret_key}&& mc ready myminio"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    #depends_on:
+    #  - nginx
+    #  - keycloak
+    <<: *extra_hosts
+    networks:
+      - data-network
+
+  # ==================================================
+  # Postgres : RBMS(OLTP, Airflow, MLflow etc)
+  # ==================================================
+  postgres:
+    image: aibiz_postgres:14.15
+    container_name: postgres
+    profiles: [prod, rnd6, postgres]
+    restart: always
+    volumes:
+      - ./volumes/postgres:/var/lib/postgresql/data
+      - ./volumes/backup:/data/backup
+      - ./postgres/postgresql.conf:/etc/postgresql.conf
+      - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf
+    command: 'postgres -c config_file=/etc/postgresql.conf'
+    ports:
+      - ${POSTGRES_PORT}:5432
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    healthcheck:
+      test: ["CMD", "pg_isready"]
+      interval: 1s
+      timeout: 10s
+      retries: 10
+    networks:
+      - data-network
+
+  # ==================================================
+  # Trino cluster service (hms + coordinator + worker)
+  # ==================================================
+  # Hive Metastore service for trino
+  trino-hms:
+    image: aibiz_hive:3.1.2
+    container_name: trino-hms
+    profiles: [test, rnd6, trino-hms-notuse]
+    restart: always
+    environment:
+      HIVE_METASTORE_DRIVER: ${POSTGRES_DB_DRIVER:-org.postgresql.Driver}
+      HIVE_METASTORE_JDBC_URL: ${HMS_JDBC_URL:-jdbc:postgresql://postgres:5432/metastore_db}
+      HIVE_METASTORE_USER: ${HMS_DB_USER:-hive}
+      HIVE_METASTORE_PASSWORD: ${HMS_DB_PASSWORD:-hive}
+      HIVE_METASTORE_WAREHOUSE_DIR: ${WAREHOUSE_DIR:-s3://delta}
+      HIVE_METASTORE_USERS_IN_ADMIN_ROLE: "aibiz"
+      S3_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+      S3_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio_access_key}
+      S3_SECRET_KEY: ${MINIO_SECRET_KEY:-minio_secret_key}
+      S3_PATH_STYLE_ACCESS: "true"
+      REGION: ""
+      GOOGLE_CLOUD_KEY_FILE_PATH: ""
+      AZURE_ADL_CLIENT_ID: ""
+      AZURE_ADL_CREDENTIAL: ""
+      AZURE_ADL_REFRESH_URL: ""
+      AZURE_ABFS_STORAGE_ACCOUNT: ""
+      AZURE_ABFS_ACCESS_KEY: ""
+      AZURE_WASB_STORAGE_ACCOUNT: ""
+      AZURE_ABFS_OAUTH: ""
+      AZURE_ABFS_OAUTH_TOKEN_PROVIDER: ""
+      AZURE_ABFS_OAUTH_CLIENT_ID: ""
+      AZURE_ABFS_OAUTH_SECRET: ""
+      AZURE_ABFS_OAUTH_ENDPOINT: ""
+      AZURE_WASB_ACCESS_KEY: ""
+      # custom env vars
+      HIVE_METASTORE_PORT_EXPOSE: ${HIVE_METASTORE_PORT_EXPOSE:-9083}
+    ports:
+      - "${HIVE_METASTORE_PORT_EXPOSE}:9083"
+    #depends_on:
+    #  - postgres
+    #  - minio
+    networks:
+      - data-network
+
+  # Trino coordinator
+  trino:
+    image: aibiz_trino:476
+    container_name: trino
+    profiles: [prod, rnd6, trino]
+    restart: on-failure
+    environment:
+      TRINO_PORT_EXPOSE: ${TRINO_PORT_EXPOSE:-8090}
+      # oltp catalog
+      OLTP_JDBC_URL: ${OLTP_JDBC_URL:-jdbc:postgresql://postgres:5432/postgres}
+      OLTP_DB_USER: ${OLTP_DB_USER:-postgres}
+      OLTP_DB_PASSWORD: ${OLTP_DB_PASSWORD:-postgres}
+      # delta catalog
+      HIVE_METASTORE_URI: ${HIVE_METASTORE_URI:-thrift://trino-hms:9083}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio_access_key}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minio_secret_key}
+
+      # iceberg catalog
+      ICE_DB_USER: ${ICE_DB_USER:-metauser}
+      ICE_DB_PASSWORD: ${ICE_DB_PASSWORD:-metauser}
+      ICE_DB_NAME: ${ICE_DB_NAME:-iceberg_db}
+      ICE_JDBC_URL: ${ICE_JDBC_URL:-jdbc:postgresql://postgres:5432/iceberg_db}
+      ICEBERG_DIR: ${ICEBERG_DIR:-s3://iceberg.db/}
+
+      # raw catalog
+      RAW_JDBC_URL1: ${RAW_JDBC_URL1:-jdbc:sqlserver://58.72.53.28:1433;databaseName=MES_SFT;encrypt=false;trustServerCertificate=true}
+      RAW_JDBC_URL2: ${RAW_JDBC_URL2:-jdbc:sqlserver://58.72.53.28:1433;databaseName=MES_SFT_LOW;encrypt=false;trustServerCertificate=true}
+      RAW_DB_USER: ${RAW_DB_USER:-sa}
+      RAW_DB_PASSWORD: ${RAW_DB_PASSWORD:-Tjdnf@SFT}
+    volumes:
+      - ./trino/etc/jvm.config:/etc/trino/jvm.config
+      - ./trino/etc/coordinator.config.properties:/etc/trino/config.properties
+      - ./trino/etc/coordinator.node.properties:/etc/trino/node.properties
+      - ./trino/etc/password-authenticator.properties:/etc/trino/password-authenticator.properties
+      - ./trino/etc/password.db:/usr/lib/trino/pwd/password.db
+      - ./trino/etc/access-control.properties:/etc/trino/access-control.properties
+      - ./trino/etc/rules.json:/etc/rules.json
+      - ./trino/catalog:/etc/trino/catalog
+      - ./trino/template:/etc/trino/template
+      - ./trino/docker-entrypoint.sh:/docker-entrypoint.sh
+#    entrypoint: [ "sh", "-c", "/usr/lib/trino/bin/run-trino" ]
+    entrypoint: [ "/docker-entrypoint.sh" ]
+    #ports:
+    #  - "${TRINO_PORT_EXPOSE}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+#    depends_on:
+#      - trino-hms
+    networks:
+      - data-network
+
+  # Trino worker service: worker nodes that execute the query
+  trino-worker:
+    image: aibiz_trino:476
+    container_name: trino-worker
+    profiles: [prod, rnd6, trino]
+    restart: on-failure
+    volumes:
+      - ./trino/etc/jvm.config:/etc/trino/jvm.config
+      - ./trino/etc/worker.config.properties:/etc/trino/config.properties
+      - ./trino/etc/worker.node.properties:/etc/trino/node.properties
+      - ./trino/catalog:/etc/trino/catalog
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    depends_on:
+#      - trino-hms
+      - trino
+    networks:
+      - data-network
+
+  # ==================================================
+  # Spark cluster service (master + worker)
+  # ==================================================
+  spark-master:
+    image: aibiz_ubuntu:24.04
+    container_name: spark-master
+    profiles: [test, spark]
+    restart: on-failure
+    #tty: true
+    command: spark-class org.apache.spark.deploy.master.Master
+    environment:
+      SPARK_MODE: master
+      # custom env vars
+      SPARK_MASTER_PORT_EXPOSE: ${SPARK_MASTER_PORT_EXPOSE:-7077}
+      SPARK_MASTER_WEBUI_PORT_EXPOSE: ${SPARK_MASTER_WEBUI_PORT_EXPOSE:-8081}
+      # oltp database
+      OLTP_DB_HOST: ${POSTGRES_HOST:-postgres}
+      OLTP_DB_PORT: ${POSTGRES_PORT:-5432}
+      OLTP_DB_NAME: ${OLTP_DB_NAME:-dutchboy}
+      OLTP_DB_USER: ${OLTP_DB_USER:-dutchboy}
+      OLTP_DB_PASSWORD: ${OLTP_DB_PASSWORD:-dutchboy}
+      SPARK_HOME: /opt/spark
+      JAVA_HOME: /usr/lib/jvm/java-8-openjdk-amd64
+      PATH: /usr/local/venv/base/bin:/opt/spark/bin:/usr/lib/jvm/java-8-openjdk-amd64/bin:$PATH
+    volumes:
+      - /opt/spark:/opt/spark
+      - /usr/lib/jvm/java-8-openjdk-amd64:/usr/lib/jvm/java-8-openjdk-amd64:ro
+      - ./spark/spark-apps:/opt/spark-apps
+      - ./spark/spark-config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+      - ./spark/spark-config/hive-site.xml:/opt/spark/conf/hive-site.xml
+      - ./spark/spark-config/core-site.xml:/opt/spark/conf/core-site.xml
+      # for python
+      - /usr/local/venv/base:/usr/local/venv/base:ro
+      - /usr/bin/python:/usr/bin/python:ro
+      - /usr/bin/python3:/usr/bin/python3:ro
+      - /usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:ro
+      - /usr/lib/python3.12:/usr/lib/python3.12:ro
+    ports:
+    #  - "${SPARK_MASTER_WEBUI_PORT_EXPOSE}:8080"
+      - "${SPARK_MASTER_PORT_EXPOSE}:7077"
+    #depends_on:
+    # - minio
+    networks:
+      - data-network
+
+  spark-worker:
+    image: aibiz_ubuntu:24.04
+    container_name: spark-worker
+    profiles: [test, spark]
+    restart: on-failure
+    #tty: true
+    command: spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    depends_on:
+      - spark-master
+    environment:
+      SPARK_MODE: worker
+      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-1}
+      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-1g}
+      SPARK_MASTER_URL: spark://spark-master:7077
+      # custom env vars
+      SPARK_WORKER_IP_RANGE: ${SPARK_WORKER_IP_RANGE:-'8091-8100'}
+      SPARK_HOME: /opt/spark
+      JAVA_HOME: /usr/lib/jvm/java-8-openjdk-amd64
+      PATH: /usr/local/venv/base/bin:/opt/spark/bin:/usr/lib/jvm/java-8-openjdk-amd64/bin:$PATH
+    ports:
+      - ${SPARK_WORKER_IP_RANGE}:8081
+    volumes:
+      - /opt/spark:/opt/spark
+      - /usr/lib/jvm/java-8-openjdk-amd64:/usr/lib/jvm/java-8-openjdk-amd64:ro
+      - ./spark/spark-apps:/opt/spark-apps
+      - ./spark/spark-config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+      - ./spark/spark-config/hive-site.xml:/opt/spark/conf/hive-site.xml
+      - ./spark/spark-config/core-site.xml:/opt/spark/conf/core-site.xml
+      # for python
+      - /usr/local/venv/base:/usr/local/venv/base:ro
+      - /usr/bin/python:/usr/bin/python:ro
+      - /usr/bin/python3:/usr/bin/python3:ro
+      - /usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:ro
+      - /usr/lib/python3.12:/usr/lib/python3.12:ro
+    networks:
+      - data-network
+
+  # ==================================================
+  # Airflow (base venv) + CeleryExecutor + Redis
+  # ==================================================
+  # Airflow Redis
+  airflow-redis:
+    image: aibiz_redis:7.4.1
+    container_name: airflow-redis
+    profiles: [prod, rnd6, airflow]
+    restart: always
+    #expose:
+    #  - 6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 30s
+      retries: 50
+      start_period: 30s
+    networks:
+      - data-network
+
+  # Airflow Webserver
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: airflow webserver
+    restart: always
+    #ports:
+    #  - "${AIRFLOW_PORT_EXPOSE}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    #volumes:
+    #  - ./airflow/config/airflow.cfg:/opt/airflow/airflow.cfg
+    depends_on:
+      <<: *airflow-common-depends-on
+
+  # Airflow Scheduler
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    restart: always
+    command: airflow scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      <<: *airflow-common-depends-on
+
+  # Airflow Worker
+  airflow-worker:
+    <<: *airflow-common
+    container_name: airflow-worker
+    command: airflow celery worker
+    restart: always
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - 'airflow celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    environment:
+      <<: *airflow-common-env
+      # Required to handle warm shutdown of the celery workers properly
+      # See https://airflow.apache.org/docs/docker-stack/entrypoint.html#signal-propagation
+      DUMB_INIT_SETSID: "0"
+    depends_on:
+      <<: *airflow-common-depends-on
+
+  # Airflow Triggerer
+  airflow-triggerer:
+    <<: *airflow-common
+    container_name: airflow-triggerer
+    restart: always
+    command: airflow triggerer
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      <<: *airflow-common-depends-on
+
+  # ==================================================
+  # MLflow (base venv)
+  # ==================================================
+  mlflow:
+    image: aibiz_ubuntu:24.04
+    container_name: mlflow
+    profiles: [prod, rnd6, mlflow]
+    restart: always
+    #depends_on:
+    #  - minio
+    #  - postgres
+    volumes:
+      - /usr/local/venv/base:/usr/local/venv/base:ro
+      - /usr/bin/python:/usr/bin/python:ro
+      - /usr/bin/python3:/usr/bin/python3:ro
+      - /usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:ro
+      - /usr/lib/python3.12:/usr/lib/python3.12:ro
+    ports:
+      - ${MLFLOW_PORT_EXPOSE}:5000
+    environment:
+      PATH : /usr/local/venv/base/bin:$PATH
+      MLFLOW_S3_ENDPOINT_URL: ${MINIO_ENDPOINT:-http://minio:9000}
+      AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minio_access_key}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-minio_secret_key}
+    command: "mlflow server --backend-store-uri ${MLFLOW_JDBC_URL} --default-artifact-root ${MLFLOW_ARTIFACT_ROOT} --host 0.0.0.0"
+    networks:
+      - data-network
+
+  # ==================================================
+  # SQLMesh (base venv), SQLMesh-0.140.1
+  # ==================================================
+  sqlmesh:
+    image: aibiz_ubuntu:24.04
+    container_name: sqlmesh
+    profiles: [test, rnd6, sqlmesh]
+    restart: always
+    #depends_on:
+    #  - trino
+    #ports:
+    #  - ${SQLMESH_PORT_EXPOSE}:${SQLMESH_PORT_EXPOSE}
+    environment:
+      PATH : /usr/local/venv/base/bin:$PATH
+      SQLMESH_PORT_EXPOSE: ${SQLMESH_PORT_EXPOSE}
+      SQLMESH_PROJECT: ${SQLMESH_PROJECT}
+      SERVER_NAME: ${SERVER_NAME}
+      TRINO_USER: ${TRINO_USER}
+      TRINO_PASSWORD: ${TRINO_PASSWORD}
+      AIRFLOW_DB_USER: ${AIRFLOW_DB_USER}
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+      AIRFLOW_DB_NAME: ${AIRFLOW_DB_NAME}
+    volumes:
+      - /usr/local/venv/base:/usr/local/venv/base:ro
+      - /usr/bin/python:/usr/bin/python:ro
+      - /usr/bin/python3:/usr/bin/python3:ro
+      - /usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:ro
+      - /usr/lib/python3.12:/usr/lib/python3.12:ro
+      - ./volumes/sqlmesh:/opt/sqlmesh
+      - ./sqlmesh/template:/etc/sqlmesh/template
+      - ./sqlmesh/docker-entrypoint.sh:/docker-entrypoint.sh
+    entrypoint: [ "/docker-entrypoint.sh" ]
+    #tty: true
+    # 루트 경로를 초기화 하고 사용함. 기존 파일 있으면 초기화 하지 않음
+    networks:
+      - data-network
+
+  # ==================================================
+  # Portainer : Container Manager
+  # ==================================================
+  portainer:
+    image: aibiz_portainer:2.25.1
+    container_name: portainer
+    profiles: [prod, rnd6, portainer]
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./volumes/portainer:/data
+    #ports:
+    #  - ${EXPOSE_PORTAINER_PORT:-9000}:${EXPOSE_PORTAINER_PORT:-9000}
+    <<: *extra_hosts
+    networks:
+      - data-network
+
+  # ==================================================
+  # Jupyterhub (base venv)
+  # ==================================================
+  jupyterhub:
+    image: aibiz_jupyterhub:5.2.1
+    container_name: jupyterhub
+    hostname: ${SERVER_NAME}
+    profiles: [prod, rnd6, jupyterhub]
+    restart: always
+    #depends_on:
+    #  - minio
+    #  - postgres
+    volumes:
+      - /usr/local/venv/base:/usr/local/venv/base:ro
+      - /usr/bin/python:/usr/bin/python:ro
+      - /usr/bin/python3:/usr/bin/python3:ro
+      - /usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:ro
+      - /usr/lib/python3.12:/usr/lib/python3.12:ro
+      - ./jupyterhub/etc/jupyterhub_config.py:/etc/jupyterhub/jupyterhub_config.py
+      - ./volumes/jupyterhub/etc:/etc/jupyterhub
+      - ./volumes/jupyterhub/home:/home
+      # for Spark
+      - /opt/spark:/opt/spark:ro
+      - /usr/lib/jvm/java-8-openjdk-amd64:/usr/lib/jvm/java-8-openjdk-amd64:ro
+      - ./spark/spark-apps:/opt/spark-apps
+      - ./spark/spark-config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+      - ./spark/spark-config/hive-site.xml:/opt/spark/conf/hive-site.xml
+      - ./spark/spark-config/core-site.xml:/opt/spark/conf/core-site.xml
+      # for MSSQL
+      - /etc/odbcinst.ini:/etc/odbcinst.ini:ro
+      - /opt/microsoft/msodbcsql18:/opt/microsoft/msodbcsql18:ro          
+      # for Airflow
+      - ./volumes/airflow:/opt/airflow
+      # for DS Team
+      - /home/aibiz/ds_code/ds_mlflow:/etc/ds_mlflow
+      - /home/aibiz/ds_code/dutchboy_system:/etc/dutchboy_system
+      - /data/tmp/mlflow_tmp:/data/tmp/mlflow_tmp
+      # for vs code
+      - /usr/lib/code-server:/opt/code-server
+      - /usr/bin/code-server:/usr/bin/code-server
+      - ./jupyterhub/etc/vs_code_icon.svg:/etc/jupyterhub/vs_code_icon.svg
+      # for data share
+      - /data/volumes/samba/개발공유:/data/share
+    #ports:
+    #  - ${JUPYTERHUB_PORT_EXPOSE}:8000
+    environment:
+      PATH: /usr/local/venv/base/bin:/opt/spark/bin:/usr/lib/jvm/java-8-openjdk-amd64/bin:/opt/code-server/bin:$PATH
+      JAVA_HOME: /usr/lib/jvm/java-8-openjdk-amd64
+      # for Spark
+      SPARK_HOME: /opt/spark
+      # for Airflow
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${AIRFLOW_DB_URL}"
+      AIRFLOW__CELERY__RESULT_BACKEND: "db+postgresql://${AIRFLOW_DB_URL}"
+      AIRFLOW__CELERY__BROKER_URL: redis://:@airflow-redis:6379/0
+      # for MLflow
+      MLFLOW_TRACKING_URI: "${MLFLOW_TRACKING_URI:-http://mlflow:5000}"
+      MLFLOW_S3_ENDPOINT_URL: ${MINIO_ENDPOINT:-http://minio:9000}
+      # for Minio
+      AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minio_access_key}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-minio_secret_key}
+      AWS_S3_ENDPOINT_URL: ${MINIO_ENDPOINT:-http://minio:9000}
+      # for Keycloak
+      SERVER_NAME: ${SERVER_NAME}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+    command: "jupyterhub -f /etc/jupyterhub/jupyterhub_config.py"
+    <<: *extra_hosts
+    networks:
+      - data-network
+
+  # ==================================================
+  # SSO : Keycloak + OpenLDAP + phpLDAPadmin
+  # ==================================================
+  keycloak:
+    image: aibiz_keycloak:26.0.7
+    container_name: sso-keycloak
+    hostname: keycloak
+    restart: always
+    profiles: [prod, rnd6, keycloak]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-"aibiz"}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-"aibiz12#$"}
+      TZ: Asia/Seoul
+      KC_DB: ${KEYCLOAK_DB:-postgres}
+      KC_DB_URL: ${KEYCLOCK_JDBC_URL:-jdbc:postgresql://postgres:5432/keycloak_db}
+      KC_DB_USERNAME: ${KEYCLOAK_DB_USER:-metauser}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-metauser}
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: true
+      KC_HOSTNAME_STRICT: false
+    command:
+      - start-dev
+    #ports:
+    #  - ${KEYCLOAK_PORT:-8080}:${KEYCLOAK_PORT:-8080}
+    depends_on:
+      - openldap
+    networks:
+      - data-network
+
+  openldap:
+    image: aibiz_openldap:1.5.0
+    container_name: sso-openldap
+    hostname: openldap
+    profiles: [prod, rnd6, keycloak]
+    restart: always
+    entrypoint: ["slapd", "-d", "0", "-h", "ldap://0.0.0.0"]
+    ports:
+      - "389:389"
+      - "636:636"
+    volumes:
+      - ./volumes/openldap/certificates:/container/service/slapd/assets/certs
+      - ./volumes/openldap/slapd/database:/var/lib/ldap
+      - ./volumes/openldap/slapd/config:/etc/ldap/slapd.d
+    environment:
+      LDAP_LOG_LEVEL: "256"
+      LDAP_ORGANISATION:
+      LDAP_DOMAIN: "ai-biz.net"
+      LDAP_ADMIN_USERNAME: "admin"
+      LDAP_ADMIN_PASSWORD: "admin"
+      LDAP_CONFIG_PASSWORD: "config"
+      LDAP_BASE_DN: "dc=ai-biz,dc=net"
+      LDAP_TLS_CRT_FILENAME: "ldap.crt"
+      LDAP_TLS_KEY_FILENAME: "ldap.key"
+      LDAP_TLS_CA_CRT_FILENAME: "ai-biz.net.ca.crt"
+      LDAP_READONLY_USER: "true"
+      LDAP_READONLY_USER_USERNAME: "readonly"
+      LDAP_READONLY_USER_PASSWORD: "readonly"
+      LDAP_OPENLDAP_UID: "${DOCKER_UID}"
+      LDAP_OPENLDAP_GID: "${DOCKER_GID}"
+    #tty: true
+    #command: [ "tail", "-f", "/dev/null" ]
+    #entrypoint: []
+    networks:
+      - data-network
+
+  phpldapadmin:
+    image: aibiz_phpldapadmin:0.9.0
+    container_name: sso-phpldapadmin
+    hostname: phpldapadmin
+    profiles: [prod, rnd6, keycloak]
+    restart: always
+    #ports:
+    #  - "8080:80"
+    environment:
+      PHPLDAPADMIN_LDAP_HOSTS: "openldap"
+      PHPLDAPADMIN_HTTPS: "false"
+    depends_on:
+      - openldap
+    networks:
+      - data-network
+
+  # ==================================================
+  # Grafana + Prometheus + node-exporter
+  # ==================================================
+  # Prometheus 
+  grafana-prometheus:
+    image: aibiz_prometheus:v3.0.1
+    container_name: grafana-prometheus
+    profiles: [prod, rnd6, grafana]
+    restart: always
+    volumes:
+      - ./prometheus/config:/etc/prometheus
+      - ./volumes/prometheus:/prometheus
+    #ports:
+    #  - ${PROMETHEUS_PORT_EXPOSE}:9090
+    command:
+      - '--storage.tsdb.path=/prometheus'
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=7d'   # 7일 보존
+      - '--storage.tsdb.retention.size=5GB'  # 5GB 초과 데이터 삭제      
+    networks:
+      - data-network
+
+  # Grafana 
+  grafana:
+    image: aibiz_grafana:11.4.0
+    container_name: grafana
+    profiles: [prod, rnd6, grafana]
+    restart: always
+    #ports:
+    #  - ${GRAFANA_PORT_EXPOSE}:3000
+    environment:
+      SERVER_NAME: ${SERVER_NAME}
+      # oltp catalog
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      OLTP_DB_PASSWORD: ${OLTP_DB_PASSWORD:-postgres}
+      # delta catalog
+      GRAFANA_DB_NAME: ${GRAFANA_DB_NAME:-grafana_db}
+      GRAFANA_DB_USER: ${GRAFANA_DB_USER:-metauser}
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-metauser}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      # SMTP 활성화
+      GF_SMTP_ENABLED: "true"
+      GF_SMTP_HOST: "smtp.gmail.com:587"
+      GF_SMTP_USER: "gdsong@ai-biz.net"
+      GF_SMTP_PASSWORD: "jksl ldis zpux sndx"
+      GF_SMTP_FROM_ADDRESS: "gdsong@ai-biz.net"
+      GF_SMTP_SKIP_VERIFY: "true"
+    volumes:
+      - ./volumes/grafana:/var/lib/grafana
+      - ./grafana/provisioning/:/etc/grafana/provisioning/
+      - ./grafana/template/grafana.ini.template:/etc/grafana/grafana.ini.template
+      - ./grafana/docker-entrypoint.sh:/docker-entrypoint.sh
+    entrypoint: [ "/docker-entrypoint.sh" ]
+    depends_on:
+      - grafana-prometheus
+    <<: *extra_hosts
+    networks:
+      - data-network
+
+  # Node exporter 
+  grafana-node-exporter:
+    image: aibiz_node-exporter:v1.8.2
+    container_name: grafana-node-exporter
+    profiles: [prod, rnd3, grafana]
+    restart: always
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    #ports:
+    #  - ${NODE_EXPORTER_PORT_EXPOSE}:9100
+    networks:
+      - data-network
+
+  # NVIDIA DCGM Exporter for GPU monitoring(ID: 22515)
+  grafana-dcgm-exporter:
+    image: aibiz_dcgm-exporter:4.4.0
+    container_name: grafana-dcgm-exporter
+    profiles: [prod, rnd3, grafana]
+    hostname: ${SERVER_NAME}
+    restart: always
+    volumes:
+      - ./dcgm-exporter/default-counters.csv:/etc/dcgm-exporter/default-counters.csv:ro
+    command:
+      - -f
+      - /etc/dcgm-exporter/default-counters.csv
+    privileged: true  # 권한 문제 해결
+    cap_add:
+      - SYS_ADMIN     # 프로파일링 메트릭을 위한 권한
+      - SYS_PTRACE
+    #ports:
+    #  - "9400:9400"
+    networks:
+      - data-network
+      
+  # ==================================================
+  # Samba : NetBIOS
+  # ==================================================
+  samba:
+    image: aibiz_samba:4.12.2
+    container_name: samba
+    profiles: [prod, rnd6, samba]
+    environment:
+      TZ: 'Asia/Seoul'
+    ports:
+    #  - "137:137/udp" # NetBIOS 이름 서비스
+    #  - "138:138/udp" # NetBIOS 데이터그램 서비스
+      - "139:139/tcp" # NetBIOS 세션 서비스
+      - "445:445/tcp"  # SMB 프로토콜 포트
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    tty: true
+    volumes:
+      - ./volumes/samba:/mnt
+      - ./samba/conf/smb.conf:/etc/samba/smb.conf
+      - ./samba/conf/secrets.tdb:/var/lib/samba/private/secrets.tdb
+      - ./samba/conf/passdb.tdb:/var/lib/samba/private/passdb.tdb
+    command: '-u "aibiz;aibiz2025" -p'
+    networks:
+      - data-network
+
+  # ==================================================
+  # Nexus : Nexus Repository
+  # ==================================================
+  nexus:
+    image: aibiz_nexus3:3.76.0
+    container_name: nexus
+    hostname: nexus
+    profiles: [test, rnd6, nexus]
+    restart: always
+    volumes:
+      - "./volumes/nexus:/nexus-data"
+    ports:
+      - ${NEXUS_PORT:-8080}:${NEXUS_PORT:-8080}
+      - ${NEXUS_DOCKER_GROUP_PORT:-5000}:${NEXUS_DOCKER_GROUP_PORT:-5000}
+      - ${NEXUS_DOCKER_LOCAL_PORT:-5001}:${NEXUS_DOCKER_LOCAL_PORT:-5001}
+    networks:
+      - data-network
+      
+  # ==================================================
+  # GitLab : GitLab Repository
+  # ==================================================
+  gitlab:
+    image: aibiz_gitlab:16.7.0-ce.0
+    container_name: gitlab
+    hostname: "gitlab.ai-biz.net"
+    profiles: [test, rnd6, gitlab]
+    restart: always
+    shm_size: "512mb"
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab.ai-biz.net';
+        # 내장 DB 비활성화
+        postgresql['enable'] = false;
+        # 외부 DB 사용 설정
+        gitlab_rails['db_adapter'] = "postgresql";
+        gitlab_rails['db_host'] = "${POSTGRES_HOST}";
+        gitlab_rails['db_port'] = ${POSTGRES_PORT};
+        gitlab_rails['db_database'] = "${GITLAB_DB_NAME}";
+        gitlab_rails['db_username'] = "${GITLAB_DB_USER}";
+        gitlab_rails['db_password'] = "${GITLAB_DB_PASSWORD}";
+        # 모니터링 서비스 사용하지 않음
+        prometheus['enable'] = false;
+        alertmanager['enable'] = false;
+        node_exporter['enable'] = false;
+        redis_exporter['enable'] = false;
+        postgres_exporter['enable'] = false;
+        gitlab_exporter['enable'] = false;
+        sidekiq['metrics_enabled'] = false;
+        # worker수 조정
+        nginx['worker_processes'] = 4;
+        puma['worker_processes'] = 4;
+        # 로그레벨 조정
+        registry['log_level'] = "warn";
+        gitlab_shell['log_level'] = 'WARN';
+        gitlab_kas['log_level'] = 'warn';
+        gitlab_shell['log_level'] = 'WARN';
+        patroni['log_level'] = 'WARN';
+        spamcheck['log_level'] = 'WARN';
+        sidekiq['log_level'] = 'warn';
+        # SSO 연동
+        gitlab_rails['omniauth_enabled'] = true;
+        gitlab_rails['omniauth_allow_single_sign_on'] = ['openid_connect'];
+        gitlab_rails['omniauth_block_auto_created_users'] = false;
+        gitlab_rails['omniauth_auto_link_user'] = true
+        gitlab_rails['omniauth_providers'] = [
+          {
+            "name" => "openid_connect",
+            "label" => "Keycloak",
+            "args" => {
+              "name" => "openid_connect",
+              "scope" => ["openid", "profile", "email"],
+              "response_type" => "code",
+              "issuer" => "https://keycloak.${SERVER_NAME}/realms/dutchboy",
+              "discovery" => true,
+              "client_auth_method" => "query",
+              "logout_redirect_uri" => "http://gitlab.ai-biz.net/users/sign_out",              
+              "uid_field" => "preferred_username",
+              "client_options" => {
+                "identifier" => "gitlab",
+                "secret" => "${KEYCLOAK_CLIENT_SECRET}",
+                "end_session_endpoint" => "https://keycloak.${SERVER_NAME}/realms/dutchboy/protocol/openid-connect/logout?redirect_uri=http://gitlab.ai-biz.net/users/auth/openid_connect/callback",
+                "authorization_endpoint" => "https://keycloak.${SERVER_NAME}/realms/dutchboy/protocol/openid-connect/auth",
+                "token_endpoint" => "https://keycloak.${SERVER_NAME}/realms/dutchboy/protocol/openid-connect/token",
+                "userinfo_endpoint" => "https://keycloak.${SERVER_NAME}/realms/dutchboy/protocol/openid-connect/userinfo",
+                "redirect_uri" => "http://gitlab.ai-biz.net/users/auth/openid_connect/callback"
+              }
+            }
+          }
+        ];
+    volumes:
+      - "./gitlab/config:/etc/gitlab"
+      - "./volumes/gitlab/logs:/var/log/gitlab"
+      - "./volumes/gitlab/data:/var/opt/gitlab"
+      - "./volumes/gitlab/backup:/var/opt/gitlab/backups"
+    #ports:
+    #  - ${GITLAB_SSH_PORT:-4022}:22
+    #  - ${GITLAB_HTTP_PORT:-4080}:80
+    <<: *extra_hosts
+    networks:
+      - data-network
+
+  gitlab-runner:
+    image: aibiz_gitlab-runner:3.21-ce9c4eb3
+    container_name: gitlab-runner
+    profiles: [test, rnd6, gitlab]
+    restart: always
+    volumes:
+      - "./gitlab-runner/config:/etc/gitlab-runner"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    environment:
+      - CI_SERVER_URL=${GITLAB_CI_SERVER_URL}
+      - REGISTRATION_TOKEN=${GITLAB_REGISTRATION_TOKEN}
+      - RUNNER_EXECUTOR=docker
+      - DOCKER_IMAGE=alpine:latest
+      - JAVA_HOME=/usr/lib/jvm/java-17-openjdk
+      - PATH=$PATH:$JAVA_HOME/bin
+    networks:
+      - data-network
+
+  gitlabex:
+    image: aibiz_gitlab:16.7.0-ce.0
+    container_name: gitlabex
+    hostname: "gitlabex.ai-biz.net"
+    profiles: [test, rnd6, gitlab]
+    restart: always
+    shm_size: "512mb"
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlabex.ai-biz.net';
+        # 내장 DB 비활성화
+        postgresql['enable'] = false;
+        # 외부 DB 사용 설정
+        gitlab_rails['db_adapter'] = "postgresql";
+        gitlab_rails['db_host'] = "${POSTGRES_HOST}";
+        gitlab_rails['db_port'] = ${POSTGRES_PORT};
+        gitlab_rails['db_database'] = "${GITLABEX_DB_NAME}";
+        gitlab_rails['db_username'] = "${GITLAB_DB_USER}";
+        gitlab_rails['db_password'] = "${GITLAB_DB_PASSWORD}";
+        # 모니터링 서비스 사용하지 않음
+        prometheus['enable'] = false;
+        alertmanager['enable'] = false;
+        node_exporter['enable'] = false;
+        redis_exporter['enable'] = false;
+        postgres_exporter['enable'] = false;
+        gitlab_exporter['enable'] = false;
+        sidekiq['metrics_enabled'] = false;
+        # 추가(External) 불필요 서비스 비활성화
+        #puma['enable'] = false;
+        #sidekiq['enable'] = false;
+        #gitlab_workhorse['enable'] = false;
+        #mail_room['enable'] = false;
+        #Spostfix['enable'] = false;
+        #grafana['enable'] = false;
+        #unicorn['enable'] = false;
+        # worker수 조정
+        nginx['worker_processes'] = 2;
+        puma['worker_processes'] = 4;
+        # 로그레벨 조정
+        registry['log_level'] = "warn";
+        gitlab_shell['log_level'] = 'WARN';
+        gitlab_kas['log_level'] = 'warn';
+        gitlab_shell['log_level'] = 'WARN';
+        patroni['log_level'] = 'WARN';
+        spamcheck['log_level'] = 'WARN';
+        sidekiq['log_level'] = 'warn';
+        # SSO 연동
+        gitlab_rails['omniauth_enabled'] = true;
+        gitlab_rails['omniauth_allow_single_sign_on'] = ['openid_connect'];
+        gitlab_rails['omniauth_block_auto_created_users'] = false;
+        gitlab_rails['omniauth_auto_link_user'] = true
+        gitlab_rails['omniauth_providers'] = [
+          {
+            "name" => "openid_connect",
+            "label" => "Keycloak",
+            "args" => {
+              "name" => "openid_connect",
+              "scope" => ["openid", "profile", "email"],
+              "response_type" => "code",
+              "issuer" => "https://keycloak.${SERVER_NAME}/realms/dutchboy",
+              "discovery" => true,
+              "client_auth_method" => "query",
+              "logout_redirect_uri" => "http://gitlabex.ai-biz.net/users/sign_out",              
+              "uid_field" => "preferred_username",
+              "client_options" => {
+                "identifier" => "gitlabex",
+                "secret" => "${KEYCLOAK_CLIENT_SECRET}",
+                "end_session_endpoint" => "https://keycloak.${SERVER_NAME}/realms/dutchboy/protocol/openid-connect/logout?redirect_uri=http://gitlabex.ai-biz.net/users/auth/openid_connect/callback",
+                "authorization_endpoint" => "https://keycloak.${SERVER_NAME}/realms/dutchboy/protocol/openid-connect/auth",
+                "token_endpoint" => "https://keycloak.${SERVER_NAME}/realms/dutchboy/protocol/openid-connect/token",
+                "userinfo_endpoint" => "https://keycloak.${SERVER_NAME}/realms/dutchboy/protocol/openid-connect/userinfo",
+                "redirect_uri" => "http://gitlabex.ai-biz.net/users/auth/openid_connect/callback"
+              }
+            }
+          }
+        ];
+    volumes:
+      - "./gitlabex/config:/etc/gitlab"
+      - "./volumes/gitlabex/logs:/var/log/gitlab"
+      - "./volumes/gitlabex/data:/var/opt/gitlab"
+      - "./volumes/gitlabex/backup:/var/opt/gitlab/backups"
+    #ports:
+    #  - ${GITLABEX_SSH_PORT:-5022}:22
+    #  - ${GITLABEX_HTTP_PORT:-5080}:80
+    <<: *extra_hosts
+    networks:
+      - data-network
+
+  # ==================================================
+  # SonarQube : SonarQube Service
+  # ==================================================
+  sonarqube:
+    image: aibiz_sonarqube:10.7.0-community
+    container_name: sonarqube
+    hostname: sonarqube
+    profiles: [test, rnd6, sonarqube]
+    #restart: always
+    ulimits:
+      nproc: 131072
+      nofile:
+        soft: 8192
+        hard: 131072
+    environment:
+      - SONAR_JDBC_URL=${SONARQUBE_JDBC_URL}
+      - SONAR_JDBC_USERNAME=${SONARQUBE_DB_USER}
+      - SONAR_JDBC_PASSWORD=${SONARQUBE_DB_PASSWORD}
+      - SONAR_AUTH_OIDC_ENABLED=true
+      - SONAR_AUTH_OIDC_PROVIDER_CONFIGURATION=https://keycloak.${SERVER_NAME}/realms/dutchboy/.well-known/openid-configuration
+      - SONAR_AUTH_OIDC_CLIENT_ID=sonarqube
+      - SONAR_AUTH_OIDC_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
+      - SONAR_AUTH_OIDC_LOGIN_STRATEGY=SameEmail
+      - SONAR_AUTH_OIDC_SCOPES=openid,profile,email
+      - SONAR_AUTH_OIDC_REDIRECT_URI=http://sonarqube.ai-biz.net/oauth2/callback/oidc
+    volumes:
+      - ./sonarqube/conf:/opt/sonarqube/conf
+      - ./volumes/sonarqube/data:/opt/sonarqube/data
+      - ./volumes/sonarqube/logs:/opt/sonarqube/logs
+      - ./volumes/sonarqube/extensions:/opt/sonarqube/extensions
+    #ports:
+    #  - ${SONARQUBE_PORT:-9000}:9000
+    networks:
+      - data-network
+
+  # ==================================================
+  # Drawio : Flowchart Maker & Online Diagram Software
+  # ==================================================
+  drawio:
+    image: aibiz_drawio:26.0.4
+    container_name: drawio
+    hostname: drawio
+    profiles: [test, rnd6, drawio]
+    #restart: always
+    environment:
+      PUBLIC_DNS: ai-biz.net
+      COUNTRY_CODE: KR    
+    #ports:
+    #  - "8080:8080"
+    networks:
+      - data-network
+
+  # ==================================================
+  # Tomcat : Web Application Server (dutchboy)
+  # ==================================================
+  tomcat:
+    image: aibiz_tomcat:9.0.69-jdk17
+    container_name: tomcat
+    profiles: [test, tomcat]
+    #restart: always
+    #depends_on:
+    #  - minio
+    #  - postgres
+    volumes:
+      - ./tomcat/conf/server.xml:/usr/local/tomcat/conf/server.xml:ro
+      - ./tomcat/conf/web.xml:/usr/local/tomcat/conf/web.xml:ro
+      - ./tomcat/conf/context.xml:/usr/local/tomcat/conf/context.xml:ro
+      - ./tomcat/conf/NexacroN_server_license.xml:/usr/local/tomcat/lib/NexacroN_server_license.xml:ro
+      - ./volumes/tomcat/logs:/usr/local/tomcat/logs
+      - ./volumes/tomcat/webapps:/usr/local/tomcat/webapps
+      - ./volumes/tomcat/hdd:/hdd
+    #command: [ "tail", "-f", "/dev/null" ]
+    #ports:
+    #  - ${TOMCAT_PORT:-8080}:${TOMCAT_PORT:-8080}
+    networks:
+      - data-network
+
+  springboot:
+    image: aibiz_springboot:1.0.0
+    container_name: springboot
+    profiles: [prod, rnd6, springboot]
+    volumes:
+      - ./volumes/springboot/app:/app:ro
+      - ./volumes/springboot/config:/config:ro
+      - ./volumes/springboot/logs:/logs
+    ports:
+      - ${SPRINGBOOT_PORT:-8080}:${SPRINGBOOT_PORT:-8080}
+    networks:
+      - data-network
+
+  semes:
+    image: aibiz_springboot:1.0.0
+    container_name: semes
+    profiles: [prod, rnd6, semes]
+    volumes:
+      - ./volumes/springboot_semes/app:/app:ro
+      - ./volumes/springboot_semes/config:/config:ro
+      - ./volumes/springboot_semes/logs:/logs
+    ports:
+      - "8082:8082"
+    networks:
+      - data-network
+
+  # ==================================================
+  # Dash : Plotly Server (dutchboy)
+  # ==================================================
+  dash:
+    image: aibiz_ubuntu:24.04
+    container_name: dash
+    profiles: [test, dash]
+    #restart: always
+    #depends_on:
+    #  - minio
+    #  - postgres
+    environment:
+      PATH : /usr/local/venv/base/bin:$PATH
+    env_file:
+      - .env
+    volumes:
+      - /usr/local/venv/base:/usr/local/venv/base:ro
+      - /usr/bin/python:/usr/bin/python:ro
+      - /usr/bin/python3:/usr/bin/python3:ro
+      - /usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:ro
+      - /usr/lib/python3.12:/usr/lib/python3.12:ro
+      - ./volumes/dash/dutchboy_dash:/home/aibiz/dutchboy_dash
+      # for DS Team
+      - /home/aibiz/ds_code/ds_mlflow:/etc/ds_mlflow
+      - /home/aibiz/ds_code/dutchboy_system:/etc/dutchboy_system
+      - /data/tmp/mlflow_tmp:/data/tmp/mlflow_tmp
+    #tty: true
+    #command: "gunicorn --access-logfile ./gunicorn-access.log main_dash:server -b 0.0.0.0:8050 -w 2 --timeout=10 -k gevent --daemon"
+    # command: >
+    #   sh -c "cd /home/aibiz/dutchboy_dash && gunicorn 'app:main(0)' -b 0.0.0.0:8050"
+    command: [ "tail", "-f", "/dev/null" ]
+    ports:
+      - 8050:8050
+    networks:
+      - data-network
+
+  dash2:
+    image: aibiz_ubuntu:24.04
+    container_name: dash2
+    profiles: [test, dash2]
+    environment:
+      PATH : /usr/local/venv/base/bin:$PATH
+    volumes:
+      - /usr/local/venv/base:/usr/local/venv/base:ro
+      - /usr/bin/python:/usr/bin/python:ro
+      - /usr/bin/python3:/usr/bin/python3:ro
+      - /usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:ro
+      - /usr/lib/python3.12:/usr/lib/python3.12:ro
+      - /home/aibiz/work/threshold_tuning:/home/aibiz/work/threshold_tuning
+    command: [ "tail", "-f", "/dev/null" ]
+    ports:
+      - 8051:8051
+    networks:
+      - data-network
+
+
+  # ==================================================
+  # dbt : Data Build Tool
+  # ==================================================
+  dbt:
+    image: aibiz_dbt:1.3.1
+    container_name: dbt
+    hostname: dbt
+    profiles: [test, dbt]
+    #restart: always
+    volumes:
+      - "./volumes/dbt:/usr/src/dbt"
+    tty: true
+    command: []
+    networks:
+      - data-network
+
+  # ==================================================
+  # Drawio : Flowchart Maker & Online Diagram Software
+  # ==================================================
+  lightdash:
+    image: aibiz_lightdash:0.1449.2
+    container_name: lightdash
+    hostname: lightdash
+    profiles: [test, lightdash]
+    #restart: always
+    environment:
+      - PGHOST=${PGHOST:-postgres}
+      - PGPORT=${PGPORT:-5432}
+      - PGUSER=${PGUSER:-metauser}
+      - PGPASSWORD=${PGPASSWORD:-metauser}
+      - PGDATABASE=${PGDATABASE:-dbt_db}
+      - SECURE_COOKIES=${SECURE_COOKIES:-false}
+      - TRUST_PROXY=${TRUST_PROXY:-false}
+      - LIGHTDASH_SECRET=${LIGHTDASH_SECRET:-admin}
+      - PORT=${PORT:-8080}
+      - LIGHTDASH_LOG_LEVEL=${LIGHTDASH_LOG_LEVEL:-info}
+      - LIGHTDASH_INSTALL_ID=${LIGHTDASH_INSTALL_ID:-admin}
+      - LIGHTDASH_INSTALL_TYPE=${LIGHTDASH_INSTALL_TYPE:-docker_image}
+      - SITE_URL=${SITE_URL:-http://localhost:8080}
+      #- EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST}
+      #- EMAIL_SMTP_PORT=${EMAIL_SMTP_PORT}
+      #- EMAIL_SMTP_SECURE=${EMAIL_SMTP_SECURE}
+      #- EMAIL_SMTP_USER=${EMAIL_SMTP_USER}
+      #- EMAIL_SMTP_PASSWORD=${EMAIL_SMTP_PASSWORD}
+      #- EMAIL_SMTP_ALLOW_INVALID_CERT=${EMAIL_SMTP_ALLOW_INVALID_CERT}
+      #- EMAIL_SMTP_SENDER_NAME=${EMAIL_SMTP_SENDER_NAME}
+      #- EMAIL_SMTP_SENDER_EMAIL=${EMAIL_SMTP_SENDER_EMAIL}
+      - ALLOW_MULTIPLE_ORGS=${ALLOW_MULTIPLE_ORGS:-false}
+      - LIGHTDASH_QUERY_MAX_LIMIT=${LIGHTDASH_QUERY_MAX_LIMIT:-5000}
+      - LIGHTDASH_MAX_PAYLOAD=${LIGHTDASH_MAX_PAYLOAD:-5mb}
+      #- HEADLESS_BROWSER_HOST=headless-browser
+      #- HEADLESS_BROWSER_PORT=3000
+      #- RUDDERSTACK_WRITE_KEY=${RUDDERSTACK_WRITE_KEY}
+      - SCHEDULER_ENABLED=true
+      #- GROUPS_ENABLED=${GROUPS_ENABLED:-false}
+      #- POSTHOG_PROJECT_API_KEY=${POSTHOG_PROJECT_API_KEY}
+      #- POSTHOG_FE_API_HOST=${POSTHOG_FE_API_HOST}
+      #- POSTHOG_BE_API_HOST=${POSTHOG_BE_API_HOST}
+    volumes:
+      - ./volumes/sqlmesh/sushi_dbt:/usr/app/dbt
+    #ports:
+    #  - ${PORT:-8080}:${PORT:-8080}
+    networks:
+      - data-network
+
+  # ==================================================
+  # NextCloud : Content collaboration platform
+  # ==================================================
+  nextcloud:
+    image: collabora/code
+    container_name: nextcloud
+    profiles: [test, nextcloud]
+    #restart: always
+    #volumes:
+    #  - ./coredns/Corefile:/Corefile
+    ports:
+      - "9980:9980"
+    environment:
+      - aliasgroup1=https://nextcloud.${SERVER_NAME}
+    cap_add:
+      - MKNOD
+    tty: true      
+    networks:
+      - data-network
+
+  # ==================================================
+  # CoreDNS : Internal DNS
+  # 종료 : sudo systemctl stop systemd-resolved
+  # cloudflare로 대체하면서 사용 않음
+  # ==================================================
+  coredns:
+    image: aibiz_coredns:1.12.0
+    container_name: coredns
+    profiles: [test, coredns]
+    #restart: always
+    volumes:
+      - ./coredns/Corefile:/Corefile
+    ports:
+      - "1053:53/udp"
+      - "1053:53/tcp"
+    networks:
+      - data-network
+
+  # ==================================================
+  # Apache : HTTP TEST
+  # ==================================================
+  apache:
+    image: httpd:latest
+    container_name: apache
+    profiles: [test, apache]
+    ports:
+      - "5080:80"
+    volumes:
+      - ./apache/project:/var/www/html #프로젝트 경로
+#      - ./apache/httpd.conf:/usr/local/apache2/conf/httpd.conf
+    networks:
+      - data-network
+
+  # ==================================================
+  # vsftp : FTP TEST
+  # ==================================================
+  ftp:
+    image: aibiz_vsftp
+    #container_name: ftp
+    profiles: [test, ftp]
+    #ports:
+    #  - "21:21"
+    #  - "65000-65100:65000-65100"
+    environment:
+      - FTP_USER=aibiz
+      - FTP_PASS=aibiz12#$
+      - PASV_ENABLE=NO           # Passive 모드 비활성화
+    #  - PASV_MIN_PORT=65000
+    #  - PASV_MAX_PORT=65100
+    volumes:
+      - ./volumes/ftp/data:/home/vsftpd/aibiz
+    networks:
+      - data-network
+
+  # ==================================================
+  # kafka : for JCET 
+  # ==================================================
+    # 1) 단일 Kafka (KRaft)
+  kafka:
+    image: aibiz_kafka:4.0.0
+    container_name: kafka
+    profiles: [test, kafka]
+    environment:
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_CFG_LISTENERS=INTERNAL://:9092,EXTERNAL://:19092,CONTROLLER://:9093      
+      - KAFKA_CFG_ADVERTISED_LISTENERS=INTERNAL://kafka:9092,EXTERNAL://kafka.rnd6.ai-biz.net:19092      
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=INTERNAL # 내부 브로커 간 통신에 사용할 리스너를 명시
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_CFG_LOG_DIRS=/bitnami/kafka/data
+      #- KAFKA_HEAP_OPTS=-Xmx512m -Xms256m        # 메모리 제한
+      - KAFKA_CLUSTER_ID=jcet-cluster-id          # 클러스터 ID 고정
+      - KAFKA_CFG_LOG_DIRS=/bitnami/kafka/data    # 데이터 저장 경로
+      #- BITNAMI_DEBUG=true    # 디버그 메시지
+    volumes:
+      - ./volumes/kafka/data:/bitnami/kafka/data
+    ports:
+      #- "9092:9092"
+      - "19092:19092"
+    networks:
+      - data-network
+
+
+  # 2) Flink JobManager
+  flink-jm:
+    image: aibiz_flink:2.0.0
+    container_name: flink-jm
+    profiles: [test, flink]
+    restart: unless-stopped
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jm
+      - "FLINK_PROPERTIES=jobmanager.rpc.address: flink-jm"
+    command: jobmanager
+#    ports:
+#      - "8081:8081"
+    volumes:
+      - ./flink/jars:/opt/flink/jars
+      - ./flink/sql:/sql
+      - ./volumes/flink:/data/warehouse
+    networks:
+      - data-network
+
+  # 3) Flink TaskManager
+  flink-tm:
+    image: aibiz_flink:2.0.0
+    container_name: flink-tm
+    profiles: [test, flink]
+    restart: unless-stopped
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jm
+    command: taskmanager
+    volumes:
+      - ./flink/jars:/opt/flink/jars
+      - ./volumes/flink:/data/warehouse
+    networks:
+      - data-network
+
+  fastapi:
+    image: aibiz_ubuntu:24.04
+    container_name: fastapi
+    profiles: [test, fastapi]
+    environment:
+      PATH: /usr/local/venv/base/bin:$PATH
+      PYTHONPATH: /home/aibiz/
+    volumes:
+      - /usr/local/venv/base:/usr/local/venv/base:ro
+      - /usr/bin/python:/usr/bin/python:ro
+      - /usr/bin/python3:/usr/bin/python3:ro
+      - /usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:ro
+      - /usr/lib/python3.12:/usr/lib/python3.12:ro
+
+      # for DS Team
+      - ./volumes/fastapi:/home/aibiz/fastapi     
+      - /home/aibiz/ds_code/ds_mlflow:/etc/ds_mlflow
+      - /home/aibiz/ds_code/dutchboy_system:/etc/dutchboy_system
+      - /data/tmp/mlflow_tmp:/data/tmp/mlflow_tmp
+
+    # working_dir: /data/volumes/fastapi
+    command: [ "tail", "-f", "/dev/null" ]
+    # command: >
+    #   sh -c "
+    #   uvicorn main:app
+    #   --host 0.0.0.0
+    #   --port 8000
+    #   --workers 4
+    #   --proxy-headers
+    #   --forwarded-allow-ips='*'
+    #   "
+    ports:
+      - 8000:8000
+    networks:
+      - data-network
+
+
+  #==================================================
+  # vLLM : LLM Inference Server (OpenAI Compatible)
+  # ==================================================
+  vllm-qwen32b:
+    image: my-vllm:0.9.9
+    container_name: vllm-qwen32b
+    profiles: [prod, rnd6, vllm]
+    restart: unless-stopped
+    ipc: host
+    shm_size: '64gb'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - /data/volumes/vllm-data/hf-cache:/root/.cache/huggingface
+      - /data/volumes/vllm-data/lmcache:/root/.cache/lmcache
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      LMCACHE_DIR: /root/.cache/lmcache
+      MODEL: "Qwen/Qwen2.5-32B-Instruct-AWQ"
+      SERVED_MODEL_NAME: "qwen-32b-24k"
+      QUANTIZATION: "awq"
+      DTYPE: "half"
+      KV_OFFLOADING_BACKEND: "lmcache"
+      KV_OFFLOADING_SIZE: "16"
+      DISABLE_HYBRID_KV_CACHE_MANAGER: "1"
+      MAX_NUM_SEQS: "64"
+      GPU_MEMORY_UTILIZATION: "0.40"
+      MAX_MODEL_LEN: "24000"
+      SWAP_SPACE: "64"
+      ENFORCE_EAGER: "0"
+    ports:
+      - "127.0.0.1:8091:8000"
+    networks:
+      - data-network
+
+  vllm-gemma27:
+    image: my-vllm:0.9.9
+    container_name: vllm-gemma27
+    profiles: [prod, rnd6, vllm]
+    restart: unless-stopped
+    ipc: host
+    shm_size: '64gb'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - /data/volumes/vllm-data/hf-cache:/root/.cache/huggingface
+      - /data/volumes/vllm-data/lmcache:/root/.cache/lmcache
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      LMCACHE_DIR: /root/.cache/lmcache
+      MODEL: "pytorch/gemma-3-27b-it-AWQ-INT4"
+      SERVED_MODEL_NAME: "gemma-27b-vl"
+      DTYPE: "bfloat16"
+      MAX_NUM_SEQS: "8"
+      GPU_MEMORY_UTILIZATION: "0.28"
+      MAX_MODEL_LEN: "8192"
+      SWAP_SPACE: "64"
+      ENFORCE_EAGER: "0"
+      KV_OFFLOADING_BACKEND: "lmcache"
+      KV_OFFLOADING_SIZE: "32"
+      DISABLE_HYBRID_KV_CACHE_MANAGER: "1"
+    ports:
+      - "127.0.0.1:8092:8000"
+    networks:
+      - data-network
+
+  vllm-qwen-emb:
+    image:   my-vllm:0.8
+    container_name: vllm-qwen-emb
+    profiles: [prod, rnd6, vllm]
+    restart: unless-stopped
+    ipc: host
+    shm_size: '64gb'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - /data/volumes/vllm-data/hf-cache:/root/.cache/huggingface
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      MODEL: "Qwen/Qwen3-Embedding-8B"
+      SERVED_MODEL_NAME: "qwen-8b-emb"
+      DTYPE: "bfloat16"
+      TRUST_REMOTE_CODE: "0"
+      ENFORCE_EAGER: "0"
+      GPU_MEMORY_UTILIZATION: "0.18"
+      MAX_NUM_SEQS: "32"
+      MAX_MODEL_LEN: "8192"
+    ports:
+      - "127.0.0.1:8093:8000"
+    networks:
+      - data-network
+
+  # ==================================================
+  # Open WebUI : LLM Web Interface
+  # ==================================================
+  open-webui:
+    image: my-webui
+    container_name: open-webui
+    profiles: [prod, rnd6, open-webui]
+    restart: unless-stopped
+    # volumes:
+      # - open-webui-data:/app/backend/data
+    ports:
+      - "127.0.0.1:8094:8080"
+    environment:
+      ENABLE_OLLAMA_API: "false"
+      OPENAI_API_BASE_URL: http://vllm-qwen32b:8000/v1
+      OPENAI_API_KEY: dummy-key
+      TRUST_PROXY: "true"
+      WEBUI_URL: https://llm.rnd6.ai-biz.net
+    networks:
+      - data-network
+# ==================================================
+# Networks configuration
+# data-network: 도커내부 통신용 네트워크로 미리 아래 명령으로 생성해 두어야 됨.
+# docker network create --driver bridge data-network
+# ==================================================
+networks:
+  data-network:
+    external: true

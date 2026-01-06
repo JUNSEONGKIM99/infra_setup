@@ -1,0 +1,60 @@
+# ====================================================================================
+# SSL certificate renewal(with certbot)
+# Author  : gdsong
+# History : 
+#   - SSL인증서 자동 업데이트를 위한 YML파일 구성
+# ====================================================================================
+
+networks:
+  data-network:
+    external: true
+
+services:
+  # ==================================================
+  # Certbot: Let's Encrypt service for SSL certificates
+  # 3개월에 1회만 실행하면 인증서 재발급 됨.
+  # 인증서는 ./volumes/certbot/conf/live/ 폴더에 있음
+  # ==================================================
+  certbot:
+    image: aibiz_certbot:v3.0.1
+    profiles: [renewal_certbot]
+    container_name: certbot
+    hostname: certbot
+    restart: no
+    volumes:
+      - ../volumes/certbot/conf:/etc/letsencrypt
+      - ../volumes/certbot/www:/var/www/html
+      - ../volumes/certbot/logs:/var/log/letsencrypt
+      - ../volumes/certbot/conf/live:/etc/letsencrypt/live
+      - ../certbot/cloudflare.ini:/etc/letsencrypt/cloudflare.ini
+    environment:
+     - SERVER_NAME=${SERVER_NAME}
+    command: >
+      sh -c "certbot certonly --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini
+      -d *.${SERVER_NAME} --preferred-challenges dns-01 --non-interactive
+      --force-renewal --quiet --agree-tos --email jslee@ai-biz.net; chown -R 100:100 /etc/letsencrypt; tail -f /var/log/letsencrypt/letsencrypt.log"
+    # --staging --break-my-certs 옵션은 "테스트 용 발급 + 기존 인증서 덮어쓰기"를 수행함.
+    # 따라서, 테스트가 끝난 이후엔 옵션 제거할 것
+
+  # ==================================================
+  # Nginx : Reverse proxy service
+  # ==================================================
+  nginx:
+    image: aibiz_nginx:1.27.3
+    container_name: nginx
+    profiles: [renewal_nginx]
+    restart: always
+    volumes:
+      - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../nginx/conf.d/aibiz.https.conf:/etc/nginx/conf.d/aibiz.https.conf:ro
+      - ../nginx/conf.d/https.conf:/etc/nginx/conf.d/https.conf:ro
+      - ../nginx/conf.d/proxy.conf:/etc/nginx/conf.d/proxy.conf:ro
+      - ../volumes/certbot/conf/live/${SERVER_NAME}/fullchain.pem:/etc/nginx/aibiz.fullchain.pem:ro
+      - ../volumes/certbot/conf/live/${SERVER_NAME}/privkey.pem:/etc/nginx/aibiz.privkey.pem:ro
+      - ../volumes/certbot/conf/live/${SERVER_NAME}/fullchain.pem:/etc/nginx/fullchain.pem:ro
+      - ../volumes/certbot/conf/live/${SERVER_NAME}/privkey.pem:/etc/nginx/privkey.pem:ro
+    ports:
+      - ${NGINX_PORT}:80
+      - ${NGINX_SSL_PORT}:443
+    networks:
+      - data-network

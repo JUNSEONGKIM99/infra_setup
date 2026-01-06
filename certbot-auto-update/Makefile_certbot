@@ -1,0 +1,55 @@
+# ====================================================================================
+# SSL certificate renewal(with certbot)
+# Author  : gdsong
+# History : 
+#   - SSL인증서 자동 업데이트를 위한 Makefile 구성
+#
+# ====================================================================================
+
+# VARIABLES
+# -----------------------------------------------------------------------------
+SERVER_NAME = rnd3.ai-biz.net
+SERVER_IP = $(shell ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '^127' | head -n 1)
+
+# 도커 네트워크 생성
+# -----------------------------------------------------------------------------
+.PHONY: create-network
+create-network:
+	@docker network inspect data-network > /dev/null 2>&1 || docker network create --driver bridge data-network
+	@echo "Network data-network created"
+
+
+define docker_up
+	@COMPOSE_IGNORE_ORPHANS=1 SERVER_NAME='$(SERVER_NAME)' SERVER_IP='$(SERVER_IP)' docker compose -p setup -f docker-compose_certbot.yml --profile $(1) up -d
+endef
+
+define docker_down
+	@COMPOSE_IGNORE_ORPHANS=1 SERVER_NAME='$(SERVER_NAME)' SERVER_IP='$(SERVER_IP)' docker compose -p setup -f docker-compose_certbot.yml --profile $(1) down
+endef
+
+# 서비스 실행(nginx)
+# -----------------------------------------------------------------------------
+.PHONY: renewal_nginx-up
+renewal_nginx-up: create-network
+	$(call docker_up,renewal_nginx)
+
+# 서비스 실행(certbot) : 인증서 가져오기
+# -----------------------------------------------------------------------------
+.PHONY: renewal_certbot-up
+renewal_certbot-up: create-network
+#	@chmod +x ./certbot/docker-entrypoint.sh
+	$(call docker_up,renewal_certbot)
+# 인증서 목록 확인 : certbot certificates
+# 인증서 삭제 : certbot delete
+
+# 서비스 종료(nginx)
+# -----------------------------------------------------------------------------
+.PHONY: renewal_nginx-down
+renewal_nginx-down: create-network
+	$(call docker_down,renewal_nginx)
+
+# 서비스 종료(certbot)
+# -----------------------------------------------------------------------------
+.PHONY: renewal_certbot-down
+renewal_certbot-down: create-network
+	$(call docker_down,renewal_certbot)

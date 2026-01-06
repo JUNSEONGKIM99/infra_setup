@@ -1,0 +1,30 @@
+gateways:
+  dutchboy:
+    connection:
+      type: postgres
+      host: postgres
+      port: 5432
+      user: postgres
+      password: postgres
+      database: dutchboy
+    state_connection:
+      type: postgres
+      host: postgres
+      port: 5432
+      user: postgres
+      password: postgres
+      database: dutchboy
+  delta:
+    connection:
+      type: trino
+      method: basic
+      host: trino.sft1.ai-biz.net
+      port: 443
+      user: aibiz
+      password: "sft09*&"
+      catalog: delta
+      verify: false
+default_gateway: dutchboy
+model_defaults:
+  dialect: postgres
+  start: 2023-01-01

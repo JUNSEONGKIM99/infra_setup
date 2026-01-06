@@ -1,0 +1,33 @@
+#################################### Server ####################################
+[server]
+# The full public facing url you use in browser, used for redirects and emails
+# If you use reverse proxy and sub path specify full url (with sub path)
+;root_url = %(protocol)s://%(domain)s:%(http_port)s/
+root_url=https://grafana.${SERVER_NAME}/
+
+#################################### Database ####################################
+[database]
+# You can configure the database connection by specifying type, host, name, user and password
+# as separate properties or as on string using the url properties.
+
+# Either "mysql", "postgres" or "sqlite3", it's your choice
+type = postgres
+host = ${POSTGRES_HOST}:${POSTGRES_PORT}
+name = ${GRAFANA_DB_NAME}
+user = ${GRAFANA_DB_USER}
+password = ${GRAFANA_DB_PASSWORD}
+
+#################################### Generic OAuth ##########################
+[auth.generic_oauth]
+name = OAuth
+icon = signin
+enabled = true
+client_id = grafana
+client_secret = ${KEYCLOAK_CLIENT_SECRET}
+scopes = openid profile email
+name_attribute_path = preferred_username
+auth_url = "https://keycloak.${SERVER_NAME}/realms/dutchboy/protocol/openid-connect/auth"
+token_url = "https://keycloak.${SERVER_NAME}/realms/dutchboy/protocol/openid-connect/token"
+api_url = "https://keycloak.${SERVER_NAME}/realms/dutchboy/protocol/openid-connect/userinfo"
+signout_redirect_url = "https://keycloak.${SERVER_NAME}/realms/dutchboy/protocol/openid-connect/logout?redirect_uri=https://grafana.${SERVER_NAME}"
+allow_sign_up = true

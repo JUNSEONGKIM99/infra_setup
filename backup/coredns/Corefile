@@ -1,0 +1,26 @@
+#rnd6.ai-biz.net:53 {
+#    log
+#    errors
+#    template IN A "*.rnd6.ai-biz.net" {
+#        match (.*)\.rnd6\.ai-biz\.net
+#        answer "{{ .Name }} 60 IN A 10.10.10.16"
+#    }
+#}
+
+.:53 {
+    log
+    errors
+    hosts {
+        10.10.10.16 jupyter.rnd6.ai-biz.net
+        10.10.10.16 minio.rnd6.ai-biz.net
+        10.10.10.16 trino.rnd6.ai-biz.net
+        10.10.10.16 spark.rnd6.ai-biz.net
+        10.10.10.16 airflow.rnd6.ai-biz.net
+        10.10.10.16 grafana.rnd6.ai-biz.net
+        10.10.10.16 mlflow.rnd6.ai-biz.net
+        10.10.10.16 sqlmesh.rnd6.ai-biz.net
+        10.10.10.16 portainer.rnd6.ai-biz.net
+        fallthrough
+    }
+    forward . 168.126.63.1 # 외부도메인은 KT로 전달
+}

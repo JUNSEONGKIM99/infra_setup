@@ -1,0 +1,631 @@
+# Makefile to manage Dutchboy docker images
+#
+# 사전 준비
+# 1) 호스트 설치
+#    Docker + Spark + Python + venv(base)
+#
+# 2) 프로젝트별 볼륨 마운트
+#    ln -s /data/volumes ~aibiz/notebooks/setup/volumes
+#:SERVER_NAME
+
+# VARIABLES
+# -----------------------------------------------------------------------------
+SERVER_NAME = $(shell hostname).ai-biz.net
+SERVER_IP = $(shell ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '^127' | head -n 1)
+GPU_EXISTS = $(shell nvidia-smi > /dev/null 2>&1 && echo 1 || echo 0)
+DATABASES = airflow_db dutchboy grafana_db keycloak_db metastore_db mlflow_db iceberg_db
+USERS = "metauser:metauser" "dutchboy:dutchboy2411@"
+
+# 확인용
+print:
+	@echo SERVER_NAME=$(SERVER_NAME)
+	@echo SERVER_IP=$(SERVER_IP)
+
+# 도커 네트워크 생성
+# -----------------------------------------------------------------------------
+.PHONY: create-network
+create-network:
+	@docker network inspect data-network > /dev/null 2>&1 || docker network create --driver bridge data-network
+	@echo "Network data-network created"
+
+# 전체 서비스 빌드(prod : minio postgres spark trino airflow sqlmesh mlflow grafana)
+# -----------------------------------------------------------------------------
+.PHONY: all-build
+all-build:
+	@docker build ./nginx --no-cache --tag aibiz_nginx:1.27.3
+	@mkdir -p ./volumes/certbot
+	@mkdir -p ./volumes/certbot/conf ./volumes/certbot/logs ./volumes/certbot/www
+	@docker build ./certbot --no-cache --tag aibiz_certbot:v3.0.1
+
+	@mkdir -p ./volumes/minio
+	@mkdir -p ./volumes/minio/minio1 ./volumes/minio/minio2 ./volumes/minio/minio3 ./volumes/minio/minio4
+	@docker build ./minio --no-cache --tag aibiz_minio:2024-12-13T22-19-12Z
+	@mkdir -p ./volumes/postgres
+	@docker build ./postgres --no-cache --tag aibiz_postgres:14.15
+
+	@docker build ./hms --no-cache --tag aibiz_hive:3.1.2
+	@docker build ./trino --no-cache --tag aibiz_trino:476
+#	@docker build ./spark
+
+	@mkdir -p ./volumes/airflow
+	@mkdir -p ./volumes/airflow/dags ./volumes/airflow/logs ./volumes/airflow/config ./volumes/airflow/plugins ./volumes/airflow/tmp
+	@docker build ./airflow --no-cache --tag aibiz_ubuntu:24.04
+	@docker build ./redis --no-cache --tag aibiz_redis:7.4.1
+#	@docker build ./mlflow
+	@mkdir -p ./volumes/sqlmesh
+
+	@mkdir -p ./volumes/portainer
+	@docker build ./portainer --no-cache --tag aibiz_portainer:2.25.1
+	@mkdir -p ./volumes/jupyterhub
+	@mkdir -p ./volumes/jupyterhub/etc ./volumes/jupyterhub/home
+	@docker build ./jupyterhub --no-cache --tag aibiz_jupyterhub:5.2.1
+
+	@mkdir -p ./volumes/prometheus
+	@docker build ./prometheus --no-cache --tag aibiz_prometheus:v3.0.1
+	@mkdir -p ./volumes/grafana
+	@docker build ./grafana --no-cache --tag aibiz_grafana:11.4.0
+	@docker build ./node-exporter --no-cache --tag aibiz_node-exporter:v1.8.2
+
+	@docker build ./keycloak --no-cache --tag aibiz_keycloak:26.0.7
+	@docker build ./openldap --no-cache --tag aibiz_openldap:1.5.0
+	@docker build ./phpldapadmin --no-cache --tag aibiz_phpldapadmin:0.9.0
+
+	@mkdir -p ./volumes/samba
+	@docker build ./samba --no-cache --tag aibiz_samba:4.12.2
+	@mkdir -p ./volumes/nexus
+	@docker build ./nexus --no-cache --tag aibiz_nexus3:3.76.0
+	@mkdir -p ./volumes/gitlab
+	@docker build ./gitlab --no-cache --tag aibiz_gitlab:16.7.0-ce.0
+	@docker build ./gitlab-runner --no-cache --tag aibiz_gitlab-runner:3.21-ce9c4eb3
+	@mkdir -p ./volumes/sonarqube
+	@docker build ./sonarqube --no-cache --tag aibiz_sonarqube:10.7.0-community
+# 	@mkdir -p ./volumes/tomcat
+# 	@mkdir -p ./volumes/tomcat/logs ./volumes/tomcat/webapps ./volumes/tomcat/hdd
+# 	@docker build ./tomcat --no-cache --tag aibiz_tomcat:9.0.69-jdk17
+	@mkdir -p ./volumes/springboot/config
+	@mkdir -p ./volumes/springboot/workspace
+	@mkdir -p ./volumes/springboot/app
+	@mkdir -p ./volumes/springboot/logs
+	@docker build ./springboot --no-cache --tag aibiz_springboot:1.0.0
+#	@docker build ./dash
+	@docker build ./drawio --no-cache --tag aibiz_drawio:26.0.4
+
+	@mkdir -p ./volumes/dbt
+	@docker build ./dbt --no-cache --tag aibiz_dbt:1.3.1
+	@docker build ./lightdash --no-cache --tag aibiz_lightdash:0.1449.2
+#	@docker build ./coredns --no-cache --tag aibiz_coredns:1.12.0
+
+	@mkdir -p ./volumes/ftp
+	@docker build ./ftp --no-cache --tag aibiz_vsftp
+
+	@chown -R aibiz:aibiz ./volumes
+
+# 공통 실행 함수
+# -----------------------------------------------------------------------------
+define docker_up
+	@SERVER_NAME='$(SERVER_NAME)' SERVER_IP='$(SERVER_IP)' docker compose -f docker-compose.yml $(if $(filter 1,$(GPU_EXISTS)),-f docker-compose-gpu.yml) --profile $(1) up -d $(if $(2),--scale $(2))
+endef
+
+define docker_down
+	@SERVER_NAME='$(SERVER_NAME)' SERVER_IP='$(SERVER_IP)' docker compose -f docker-compose.yml $(if $(filter 1,$(GPU_EXISTS)),-f docker-compose-gpu.yml) --profile $(1) down
+endef
+
+#	@SERVER_NAME='$(SERVER_NAME)' SERVER_IP='$(SERVER_IP)' docker compose -f docker-compose.yml $(if $(filter 1,$(GPU_EXISTS)),-f docker-compose-gpu.yml) --profile $(1) up -d
+
+# 전체 서비스 실행
+# -----------------------------------------------------------------------------
+.PHONY: all-up
+all-up: create-network
+	$(call docker_up,prod)
+
+# 전체 서비스 실행(rnd6)
+# -----------------------------------------------------------------------------
+.PHONY: rnd6-up
+rnd6-up: create-network
+	$(call docker_up,rnd6)
+
+# 서비스 실행(nginx)
+# -----------------------------------------------------------------------------
+.PHONY: nginx-up
+nginx-up: create-network
+	$(call docker_up,nginx)
+
+# 서비스 실행(certbot) : 인증서 가져오기
+# -----------------------------------------------------------------------------
+.PHONY: certbot-up
+certbot-up: create-network
+#	@chmod +x ./certbot/docker-entrypoint.sh
+	$(call docker_up,certbot)
+# 인증서 목록 확인 : certbot certificates
+# 인증서 삭제 : certbot delete
+
+# 서비스 실행(minio)
+# -----------------------------------------------------------------------------
+.PHONY: minio-up
+minio-up: create-network
+	$(call docker_up,minio)
+
+# 서비스 실행(postgres)
+# -----------------------------------------------------------------------------
+.PHONY: postgres-up
+postgres-up: create-network
+	$(call docker_up,postgres)
+
+# 서비스 실행(hms+trino)(worker=1)
+# -----------------------------------------------------------------------------
+.PHONY: trino-up
+trino-up: create-network
+	$(call docker_up,trino,trino-worker=1)
+
+# 서비스 실행(spark, worker=1)
+# -----------------------------------------------------------------------------
+.PHONY: spark-up
+spark-up: create-network
+	$(call docker_up,spark,spark-worker=1)
+
+# 서비스 실행(airflow)
+# -----------------------------------------------------------------------------
+.PHONY: airflow-up
+airflow-up: create-network
+	$(call docker_up,airflow)
+
+# 서비스 실행(mlflow)
+# -----------------------------------------------------------------------------
+.PHONY: mlflow-up
+mlflow-up: create-network
+	$(call docker_up,mlflow)
+
+# 서비스 실행(sqlmesh)
+# -----------------------------------------------------------------------------
+.PHONY: sqlmesh-up
+sqlmesh-up: create-network
+	$(call docker_up,sqlmesh)
+
+# 서비스 실행(portainer)
+# -----------------------------------------------------------------------------
+.PHONY: portainer-up
+portainer-up: create-network
+	$(call docker_up,portainer)
+
+# 서비스 실행(jupyterhub)
+# -----------------------------------------------------------------------------
+.PHONY: jupyterhub-up
+jupyterhub-up: create-network
+	$(call docker_up,jupyterhub)
+
+# 서비스 실행(grafana)
+# -----------------------------------------------------------------------------
+.PHONY: grafana-up
+grafana-up: create-network
+	$(call docker_up,grafana)
+
+# 서비스 실행(keycloak)
+# -----------------------------------------------------------------------------
+.PHONY: keycloak-up
+keycloak-up: create-network
+	$(call docker_up,keycloak)
+
+# 서비스 실행(samba)
+# -----------------------------------------------------------------------------
+.PHONY: samba-up
+samba-up: create-network
+	$(call docker_up,samba)
+
+# 서비스 실행(nexus)
+# -----------------------------------------------------------------------------
+.PHONY: nexus-up
+nexus-up: create-network
+	$(call docker_up,nexus)
+
+# 서비스 실행(gitlab)
+# -----------------------------------------------------------------------------
+.PHONY: gitlab-up
+gitlab-up: create-network
+	$(call docker_up,gitlab)
+
+# 서비스 실행(sonarqube)
+# -----------------------------------------------------------------------------
+.PHONY: sonarqube-up
+sonarqube-up: create-network
+	$(call docker_up,sonarqube)
+
+# 서비스 실행(tomcat)
+# -----------------------------------------------------------------------------
+.PHONY: tomcat-up
+tomcat-up: create-network
+	$(call docker_up,tomcat)
+
+.PHONY: springboot-up
+springboot-up: create-network
+	$(call docker_up,springboot)
+
+# 서비스 실행(dash)
+# -----------------------------------------------------------------------------
+.PHONY: dash-up
+dash-up: create-network
+	$(call docker_up,dash)
+
+# 서비스 실행(drawio)
+# -----------------------------------------------------------------------------
+.PHONY: drawio-up
+drawio-up: create-network
+	$(call docker_up,drawio)
+
+# 서비스 실행(dbt)
+# -----------------------------------------------------------------------------
+.PHONY: dbt-up
+dbt-up: create-network
+	$(call docker_up,dbt)
+
+# 서비스 실행(lightdash)
+# -----------------------------------------------------------------------------
+.PHONY: lightdash-up
+lightdash-up: create-network
+	$(call docker_up,lightdash)
+
+# 서비스 실행(coredns)
+# -----------------------------------------------------------------------------
+.PHONY: coredns-up
+coredns-up: create-network
+	$(call docker_up,coredns)
+
+# 서비스 실행(nextcloud)
+# -----------------------------------------------------------------------------
+.PHONY: nextcloud-up
+nextcloud-up: create-network
+	$(call docker_up,nextcloud)
+
+# 서비스 실행(ftp)
+# -----------------------------------------------------------------------------
+.PHONY: ftp-up
+ftp-up: create-network
+	$(call docker_up,ftp,ftp=10)
+
+# 전체 서비스 종료
+# -----------------------------------------------------------------------------
+.PHONY: all-down
+all-down:
+	$(call docker_down,prod)
+	@docker network rm data-network
+	@echo "Network data-network removed"
+
+# 전체 서비스 종료(rnd6)
+# -----------------------------------------------------------------------------
+.PHONY: rnd6-down
+rnd6-down:
+	$(call docker_down,rnd6)
+	@docker network rm data-network
+	@echo "Network data-network removed"
+
+# 서비스 종료(nginx)
+# -----------------------------------------------------------------------------
+.PHONY: nginx-down
+nginx-down:
+	$(call docker_down,nginx)
+
+# 서비스 종료(certbot)
+# -----------------------------------------------------------------------------
+.PHONY: certbot-down
+certbot-down:
+	$(call docker_down,certbot)
+
+# 서비스 종료(minio)
+# -----------------------------------------------------------------------------
+.PHONY: minio-down
+minio-down:
+	$(call docker_down,minio)
+
+# 서비스 종료(postgres)
+# -----------------------------------------------------------------------------
+.PHONY: postgres-down
+postgres-down:
+	$(call docker_down,postgres)
+
+# 서비스 종료(hms+trino)(worker=1)
+# -----------------------------------------------------------------------------
+.PHONY: trino-down
+trino-down:
+	$(call docker_down,trino)
+
+# 서비스 종료(spark, worker=1)
+# -----------------------------------------------------------------------------
+.PHONY: spark-down
+spark-down:
+	$(call docker_down,spark)
+
+# 서비스 종료(airflow)
+# -----------------------------------------------------------------------------
+.PHONY: airflow-down
+airflow-down:
+	$(call docker_down,airflow)
+
+# 서비스 종료(mlflow)
+# -----------------------------------------------------------------------------
+.PHONY: mlflow-down
+mlflow-down: create-network
+	$(call docker_down,mlflow)
+
+# 서비스 종료(sqlmesh)
+# -----------------------------------------------------------------------------
+.PHONY: sqlmesh-down
+sqlmesh-down:
+	$(call docker_down,sqlmesh)
+
+# 서비스 종료(portainer)
+# -----------------------------------------------------------------------------
+.PHONY: portainer-down
+portainer-down:
+	$(call docker_down,portainer)
+
+# 서비스 종료(jupyterhub)
+# -----------------------------------------------------------------------------
+.PHONY: jupyterhub-down
+jupyterhub-down:
+	$(call docker_down,jupyterhub)
+
+# 서비스 종료(grafana)
+# -----------------------------------------------------------------------------
+.PHONY: grafana-down
+grafana-down: create-network
+	$(call docker_down,grafana)
+
+# 서비스 종료(keycloak)
+# -----------------------------------------------------------------------------
+.PHONY: keycloak-down
+keycloak-down:
+	$(call docker_down,keycloak)
+
+# 서비스 종료(samba)
+# -----------------------------------------------------------------------------
+.PHONY: samba-down
+samba-down:
+	$(call docker_down,samba)
+
+# 서비스 종료(nexus)
+# -----------------------------------------------------------------------------
+.PHONY: nexus-down
+nexus-down:
+	$(call docker_down,nexus)
+
+# 서비스 종료(gitlab)
+# -----------------------------------------------------------------------------
+.PHONY: gitlab-down
+gitlab-down:
+	$(call docker_down,gitlab)
+
+# 서비스 종료(sonarqube)
+# -----------------------------------------------------------------------------
+.PHONY: sonarqube-down
+sonarqube-down:
+	$(call docker_down,sonarqube)
+
+# 서비스 종료(tomcat)
+# -----------------------------------------------------------------------------
+.PHONY: tomcat-down
+tomcat-down:
+	$(call docker_down,tomcat)
+
+.PHONY: springboot-down
+springboot-down:
+	$(call docker_down,springboot)
+
+# 서비스 종료(dash)
+# -----------------------------------------------------------------------------
+.PHONY: dash-down
+dash-down:
+	$(call docker_down,dash)
+
+# 서비스 종료(drawio)
+# -----------------------------------------------------------------------------
+.PHONY: drawio-down
+drawio-down:
+	$(call docker_down,drawio)
+
+# 서비스 종료(dbt)
+# -----------------------------------------------------------------------------
+.PHONY: dbt-down
+dbt-down:
+	$(call docker_down,dbt)
+
+# 서비스 종료(lightdash)
+# -----------------------------------------------------------------------------
+.PHONY: lightdash-down
+lightdash-down:
+	$(call docker_down,lightdash)
+
+# 서비스 종료(nextcloud)
+# -----------------------------------------------------------------------------
+.PHONY: nextcloud-down
+nextcloud-down:
+	$(call docker_down,nextcloud)
+
+# 서비스 종료(coredns)
+# -----------------------------------------------------------------------------
+.PHONY: coredns-down
+coredns-down:
+	$(call docker_down,coredns)
+
+# 서비스 종료(ftp)
+# -----------------------------------------------------------------------------
+.PHONY: ftp-down
+ftp-down:
+	$(call docker_down,ftp)
+
+# MinIO 백업/복원
+# -----------------------------------------------------------------------------
+# MinIO 백업 (from Host)
+.PHONY: minio-backup
+minio-backup: 
+#@sudo systemctl start minio
+#@mc alias set myminio http://localhost:7078 aibiz aibiz12#$
+	@mc alias set myminio http://localhost:7078 aibiz aibiz12#$
+	@mkdir -p ./volumes/backup/minio_backup
+	@mc mirror myminio ./volumes/backup/minio_backup
+#	@sudo systemctl stop minio
+
+# MinIO 복원 (to Docker)
+.PHONY: minio-restore
+minio-restore:
+	@mc alias set myminio http://localhost:7078 aibiz aibiz12#$
+	@mc mirror ./volumes/backup/minio_backup myminio --overwrite
+
+# DB 백업/복원
+# -----------------------------------------------------------------------------
+# DB 백업 (from Host): 쉘에서 직접 실행할 것
+.PHONY: db-full-backup
+db-full-backup:
+#	@sudo systemctl start postgresql
+	@sudo -i -u postgres
+	@pg_dumpall -U postgres > /tmp/full_backup_db.sql
+	@sudo mv /tmp/full_backup_db.sql ./volumes/backup/full_backup_db.sql
+	@sudo chown -R aibiz:aibiz /data/./volumes
+	@sudo systemctl stop postgresql
+
+# Postgres 복원 (to Docker)
+.PHONY: db-full-restore
+db-full-restore:
+	@sudo docker exec -i postgres psql -U postgres -f /data/backup/full_backup_db.sql
+
+# DB 개별 백업 (from Docker)
+# 특정 스키마만 백업
+# pg_dump -U postgres -d dutchboy --schema=public -Fc -f dutchboy_backup.dump
+# pg_restore -U postgres -d dutchboy --schema=public -Fc dutchboy_backup.dump
+# scp dutchboy_backup.dump.gz aibiz@10.10.10.16:/home/aibiz/notebooks/setup/volumes/tomcat/.
+# scp project.tar aibiz@10.10.10.16:/home/aibiz/notebooks/setup/volumes/dash/.
+# -----------------------------------------------------------------------------
+.PHONY: db-backup
+db-backup:
+	@for db in $(DATABASES); do \
+		echo "Backing up $$db..."; \
+		sudo docker exec -i postgres pg_dump -U postgres -Fc $$db > /data/backup/$$db.dump; \
+	done
+
+# DB 개별 복원 (to Docker)
+# -----------------------------------------------------------------------------
+.PHONY: db-restore
+db-restore:
+	@for db in $(DATABASES); do \
+		echo "Restoring $$db..."; \
+		sudo docker exec -i postgres pg_restore -U postgres -d $$db /data/backup/$$db.dump; \
+	done
+
+# DB 초기화
+.PHONY: db-init
+db-init:
+	# 사용자 생성
+	@for user in $(USERS); do \
+		username=$$(echo $$user | cut -d':' -f1); \
+		password=$$(echo $$user | cut -d':' -f2); \
+		echo "Creating user $$username..."; \
+		sudo docker exec -i postgres psql -U postgres -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$$username') THEN CREATE USER $$username WITH PASSWORD '$$password'; END IF; END \$\$;"; \
+	done
+
+	# 데이터베이스 생성
+	@for db in $(DATABASES); do \
+		echo "Creating database $$db..."; \
+		owner="metauser"; \
+		if [ "$$db" = "dutchboy" ]; then owner="dutchboy"; fi; \
+		sudo docker exec -i postgres psql -U postgres -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '$$db') THEN CREATE DATABASE $$db WITH OWNER $$owner; END IF; END \$\$;"; \
+	done
+
+	# 기본 사용자 비밀번호 변경
+	@echo "Updating postgres user password..."; \
+	sudo docker exec -i postgres psql -U postgres -c "ALTER USER postgres WITH PASSWORD 'postgres';"
+
+
+# python 가상환경 백업/복원
+# -----------------------------------------------------------------------------
+# python 가상환경 백업 : airflow, mlflow, jupyterhub ...
+.PHONY: venv-backup
+venv-backup: 
+	@/usr/bin/pip freeze > ./python/requirements_golbal.txt
+	@/usr/local/venv/airflow/bin/pip freeze > ./python/requirements_airflow.txt
+	@/usr/local/venv/mlflow/bin/pip freeze > ./python/requirements_mlflow.txt
+	@/usr/local/venv/jupyterhub/bin/pip freeze > ./python/requirements_jupyterhub.txt
+	@/usr/local/venv/base/bin/pip freeze > ./python/requirements_base.txt
+	@~/venv/bin/pip freeze > ./python/myvenv.txt
+
+# 가상환경 복원
+.PHONY: venv-restore
+venv-restore:
+	@python3 -m venv /usr/local/venv/base
+	@/usr/local/venv/base/bin/pip install -r ./python/requirements_base.txt
+	@source /usr/local/venv/base/bin/activate
+
+# (참고)jupyterhub 설치
+	@/usr/local/venv/base/bin/pip install --upgrade pip
+	@/usr/local/venv/base/bin/pip install jupyterhub notebook jupyterlab
+	@/usr/local/venv/base/bin/pip install bash_kernel
+	@/usr/local/venv/base/bin/python3 -m bash_kernel.install --prefix=/usr/local/venv/base
+	@/usr/local/venv/base/bin/jupyter kernelspec list
+# (참고)dash 설치(docx, openpyxl, fonttool, klayout, pyarmor 등)
+	@/usr/local/venv/base/bin/pip install dash==2.9.3
+	@/usr/local/venv/base/bin/pip install docx==0.2.4
+	@/usr/local/venv/base/bin/pip install docxcompose==1.4.0
+	@/usr/local/venv/base/bin/pip install docxtpl==0.18.0
+	@/usr/local/venv/base/bin/pip install et-xmlfile==1.1.0
+	@/usr/local/venv/base/bin/pip install Flask-Cors==4.0.0
+	@/usr/local/venv/base/bin/pip install Flask-RESTful==0.3.9
+	@/usr/local/venv/base/bin/pip install kaleido==0.1.0
+	@/usr/local/venv/base/bin/pip install klayout==0.29.6
+	@/usr/local/venv/base/bin/pip install lxml==4.9.2
+	@/usr/local/venv/base/bin/pip install opencv-python==4.7.0.72
+	@/usr/local/venv/base/bin/pip install openpyxl==3.1.2
+	@/usr/local/venv/base/bin/pip install packaging==23.1
+	@/usr/local/venv/base/bin/pip install pyarmor==9.0.7
+	@/usr/local/venv/base/bin/pip install pyarmor.cli.core==2.1.9
+	@/usr/local/venv/base/bin/pip install pycryptodome==3.17
+	@/usr/local/venv/base/bin/pip install python-pptx==0.6.21
+# (참고)spark, delta-spark
+	@/usr/local/venv/base/bin/pip install pyspark
+	@/usr/local/venv/base/bin/pip install delta-spark
+# (참고)검사
+	/usr/local/venv/base/bin/airflow version
+	/usr/local/venv/base/bin/mlflow --version
+	/usr/local/venv/base/bin/sqlmesh --version
+	/usr/local/venv/base/bin/jupyterhub --version
+	/usr/local/venv/base/bin/pip show dash
+	/usr/local/venv/base/bin/pip show delta-spark
+
+# Spark 마스터에 전송
+# -----------------------------------------------------------------------------
+.PHONY: spark-submit
+spark-submit:
+	@docker exec -it spark-master bash -c "cd /opt/spark-apps && spark-submit --master spark://spark-master:7077 create_schema.py"
+
+# 전체 이미지 삭제
+# -----------------------------------------------------------------------------
+.PHONY: all-clean
+clean-all:
+	@docker rmi $(docker images -q)
+	@docker system prune -f
+
+# 정기적으로 아래 명령실행 필요(사용하지 않는 이미지, 볼륨 삭제)
+# docker system prune -a
+#
+# root권한으로 도커 접속
+# docker exec -i -t --user root <container_id> bash
+
+# 도움말
+# -----------------------------------------------------------------------------
+.PHONY: help
+help:
+	@echo "Usage: make [target]"
+	@echo ""
+	@echo "Targets:"
+	@echo "  create-network    		Create docker network if not exists"
+	@echo "  all-build 				Build all docker images"
+	@echo "  all-up    				Compose up all services"
+	@echo "  service-up     		Compose up a service"
+	@echo "  all-down  				Compose down all services then remove network"
+	@echo "  service-down  			Compose down a service"
+	@echo "  minio-backup/restore	Minio backup/restore"
+	@echo "  db-full-backup/restore Database full backup/restore"
+	@echo "  db-backup/restore 		Database backup/restore"
+	@echo "  db-init           		Initialize database"
+	@echo "  venv-backup/restore 	Python virtual environment backup/restore"
+	@echo "  spark-submit      		Spark master submit"
+	@echo "  all-clean        		Clean all"
+	@echo "  help              		Show this help message"
+	@echo "  applied service list   nginx, certbot, minio, postgres, trino, spark, airflow, mlflow, sqlmesh, portainer, jupyterhub, grafana, keycloak, nextcloud"
+	@echo ""

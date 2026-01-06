@@ -1,0 +1,36 @@
+# CUDA runtime base (good default)
+FROM nvidia/cuda:12.9.0-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    TOKENIZERS_PARALLELISM=false
+
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv python3-dev git curl \
+    build-essential \
+ && rm -rf /var/lib/apt/lists/*
+
+# vLLM + OpenAI server deps
+# NOTE: vLLM releases move fast; pin if you need reproducibility.
+RUN pip3 install --upgrade pip 
+
+
+RUN pip3 install "vllm>=0.6.0" "lmcache" "fastapi" "uvicorn[standard]" \
+                 "huggingface_hub" "torch-c-dlpack-ext"
+
+
+# Optional: If you want to preconfigure HF cache location
+ENV HF_HOME=/root/.cache/huggingface 
+#    TRANSFORMERS_CACHE=/root/.cache/huggingface
+
+ENV LMCACHE_DIR=/root/.cache/lmcache
+RUN mkdir -p ${LMCACHE_DIR}
+
+# Entrypoint
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 8000
+ENTRYPOINT ["/entrypoint.sh"]

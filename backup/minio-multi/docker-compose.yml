@@ -1,0 +1,104 @@
+
+#
+# Docker compose file for Dutchboy
+# Author  : jslee
+# Contact : AIBIZ co.,Ltd.
+#
+# 공통부분
+x-minio-common: 
+  &minio-common
+  profiles: [prod, minio]
+  image: aibiz_minio:2024-12-13T22-19-12Z
+  command: server --address ":${MINIO_API_PORT:-9001}" --console-address ":${MINIO_CONSOLE_PORT:-9001}" http://minio{1...4}:7078/data{1...2}
+  expose:
+    - ${MINIO_API_PORT:-9000}
+    - ${MINIO_CONSOLE_PORT:-9001}
+  environment:
+    MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minio_access_key}
+    MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minio_secret_key}
+    MINIO_OPTS: "--address :${MINIO_API_PORT:-9001} --console-address :${MINIO_CONSOLE_PORT:-9001}"
+  healthcheck:
+    test: ["CMD", "sh", "-c", "mc alias set myminio http://localhost:${MINIO_API_PORT:-9000} ${MINIO_ACCESS_KEY:-minio_access_key} ${MINIO_SECRET_KEY:-minio_secret_key}&& mc ready myminio"]
+    interval: 5s
+    timeout: 5s
+    retries: 5
+  networks:
+    - data-network
+
+services:
+  # ==================================================
+  # MinIO : Object storage (Deltalake, HMS, MLflow)
+  # ==================================================
+  # minio서버(4개)가 niginx 프록시를 통해 LB됨
+  minio1:
+    <<: *minio-common
+    hostname: minio1
+    volumes:
+      - ${MINIO_ROOT:-./volumes/minio}/minio1-1:/data1
+      - ${MINIO_ROOT:-./volumes/minio}/minio1-2:/data2
+
+  minio2:
+    <<: *minio-common
+    hostname: minio2
+    volumes:
+      - ${MINIO_ROOT:-./volumes/minio}/minio2-1:/data1
+      - ${MINIO_ROOT:-./volumes/minio}/minio2-2:/data2
+
+  minio3:
+    <<: *minio-common
+    hostname: minio3
+    volumes:
+      - ${MINIO_ROOT:-./volumes/minio}/minio3-1:/data1
+      - ${MINIO_ROOT:-./volumes/minio}/minio3-2:/data2
+
+  minio4:
+    <<: *minio-common
+    hostname: minio4
+    volumes:
+      - ${MINIO_ROOT:-./volumes/minio}/minio4-1:/data1
+      - ${MINIO_ROOT:-./volumes/minio}/minio4-2:/data2
+
+  # 주의: 서비스 포트 변경시 nginx환경파일도 수정
+  minio:
+    image: aibiz_nginx:1.19.2-alpine
+    hostname: minio
+    container_name: minio
+    profiles: [prod, minio]
+    volumes:
+      - ./minio/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - ${MINIO_API_PORT:-9000}:${MINIO_API_PORT:-9000}
+      - ${MINIO_CONSOLE_PORT:-9001}:${MINIO_CONSOLE_PORT:-9001}
+    depends_on:
+      - minio1
+      - minio2
+      - minio3
+      - minio4
+    networks:
+      - data-network
+
+  # ==================================================
+  # Nginx : Reverse proxy service
+  # ==================================================
+  nginx:
+    image: aibiz_nginx:1.19.2-alpine
+    hostname: nginx
+    container_name: nginx
+    profiles: [prod, nginx]
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - ${EXPOSE_NGINX_PORT:-80}:${NGINX_PORT:-80}
+      - ${EXPOSE_NGINX_SSL_PORT:-443}:${NGINX_SSL_PORT:-443}
+    #command: [ "tail", "-f", "/dev/null" ]
+    networks:
+      - data-network
+
+# ==================================================
+# Networks configuration
+# data-network: 도커내부 통신용 네트워크로 미리 아래 명령으로 생성해 두어야 됨.
+# docker network create --driver bridge data-network
+# ==================================================
+networks:
+  data-network:
+    external: true

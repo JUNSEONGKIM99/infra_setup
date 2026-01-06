@@ -1,0 +1,64 @@
+{
+    "clientId": "sonarqube",
+    "name": "sonarqube SSO",
+    "description": "",
+    "rootUrl": "https://sonarqube.ai-biz.net/",
+    "adminUrl": "https://sonarqube.ai-biz.net/",
+    "baseUrl": "https://sonarqube.ai-biz.net/",
+    "surrogateAuthRequired": false,
+    "enabled": true,
+    "alwaysDisplayInConsole": false,
+    "clientAuthenticatorType": "client-secret",
+    "secret": "SD0lUCe4vKB8zdGDObqGjDxFqjYVwWyw",
+    "redirectUris": [
+      "http://sonarqube.ai-biz.net/*",
+      "https://sonarqube.ai-biz.net/*"
+    ],
+    "webOrigins": [
+      "http://sonarqube.ai-biz.net/#!/",
+      "https://sonarqube.ai-biz.net/#!/"
+    ],
+    "notBefore": 0,
+    "bearerOnly": false,
+    "consentRequired": false,
+    "standardFlowEnabled": true,
+    "implicitFlowEnabled": false,
+    "directAccessGrantsEnabled": true,
+    "serviceAccountsEnabled": false,
+    "publicClient": false,
+    "frontchannelLogout": true,
+    "protocol": "openid-connect",
+    "attributes": {
+      "realm_client": "false",
+      "oidc.ciba.grant.enabled": "false",
+      "client.secret.creation.time": "1735978220",
+      "backchannel.logout.session.required": "true",
+      "post.logout.redirect.uris": "https://sonarqube.ai-biz.net/#!/logout",
+      "display.on.consent.screen": "false",
+      "oauth2.device.authorization.grant.enabled": "true",
+      "backchannel.logout.revoke.offline.tokens": "false"
+    },
+    "authenticationFlowBindingOverrides": {},
+    "fullScopeAllowed": true,
+    "nodeReRegistrationTimeout": -1,
+    "defaultClientScopes": [
+      "web-origins",
+      "acr",
+      "roles",
+      "profile",
+      "basic",
+      "email"
+    ],
+    "optionalClientScopes": [
+      "address",
+      "phone",
+      "offline_access",
+      "organization",
+      "microprofile-jwt"
+    ],
+    "access": {
+      "view": true,
+      "configure": true,
+      "manage": true
+    }
+  }

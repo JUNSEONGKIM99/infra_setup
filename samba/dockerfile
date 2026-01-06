@@ -1,0 +1,14 @@
+# 이미지 생성
+FROM dperson/samba:latest
+USER root
+# 기존 smbuser(100):smb(101)을 1000:1000로 변경
+RUN usermod -u 1000 smbuser
+RUN groupmod -g 1000 smb
+
+# aibiz도 동일한 1000:1000으로 추가
+RUN echo "aibiz:x:1000:1000::/home/aibiz:/bin/sh" >> /etc/passwd
+RUN echo "aibiz:x:1000:" >> /etc/group
+RUN mkdir -p /home/aibiz
+RUN chown -R aibiz:aibiz /home/aibiz
+# root권한으로 실행해야 함.
+#USER aibiz

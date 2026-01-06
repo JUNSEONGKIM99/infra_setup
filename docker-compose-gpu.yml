@@ -1,0 +1,44 @@
+# ====================================================================================
+# Docker compose override file for GPU
+# Author  : jslee
+# Contact : AIBIZ co.,Ltd.
+# ====================================================================================
+services:
+  # ==================================================
+  # Jupyterhub (base venv)
+  # ==================================================
+  jupyterhub:
+    volumes:
+      # for GPU
+      - /usr/local/venv/dutchboy:/usr/local/venv/dutchboy:ro
+    environment:
+      # for cuda
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+    runtime: nvidia
+  # ==================================================
+  # aiflow-worker
+  # ==================================================
+  airflow-worker:
+    volumes:
+      # for GPU
+      - /usr/local/venv/dutchboy:/usr/local/venv/dutchboy:ro
+    environment:
+      # for cuda
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+    runtime: nvidia
+  # ==================================================
+  # grafana dcgm
+  # ==================================================
+  grafana-dcgm-exporter:
+    volumes:
+      # for GPU
+      - /usr/local/venv/dutchboy:/usr/local/venv/dutchboy:ro
+    environment:
+      # for cuda
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+    runtime: nvidia
+  # ==================================================
+  

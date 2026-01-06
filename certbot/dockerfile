@@ -1,0 +1,11 @@
+# UID를 1000으로 변경해서 aibiz와 일치시킴
+FROM certbot/certbot:v3.0.1
+ENTRYPOINT []
+CMD []
+USER root
+RUN pip install certbot-dns-cloudflare
+#RUN echo "aibiz:x:1000:1000::/home/aibiz:/bin/sh" >> /etc/passwd
+#RUN echo "aibiz:x:1000:" >> /etc/group
+#RUN mkdir -p /home/aibiz
+#RUN chown -R aibiz:aibiz /home/aibiz
+#USER aibiz

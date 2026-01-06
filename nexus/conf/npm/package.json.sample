@@ -1,0 +1,3 @@
+"publishConfig":{
+  "registry":"https://nexus.rnd6.ai-biz.net/repository/npm-local/"
+  }

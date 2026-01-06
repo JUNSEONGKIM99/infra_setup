@@ -1,0 +1,7 @@
+# Use the official Open WebUI image as the base
+FROM ghcr.io/open-webui/open-webui:main
+
+# (Optional) You can set environment variables here if you want them fixed
+# ENV OLLAMA_BASE_URL=http://host.docker.internal:11434
+
+# The official image already exposes port 8080 and defines the volume /app/backend/data

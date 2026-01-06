@@ -1,0 +1,12 @@
+# 이미지 생성
+FROM osixia/openldap:1.5.0
+USER root
+# 기존 openldap(911):openldap(911)을 1000:1000 변경
+RUN usermod -u 1000 openldap
+RUN groupmod -g 1000 openldap
+RUN chown -R openldap:openldap /container/tool
+#RUN echo "aibiz:x:1000:1000::/home/aibiz:/bin/sh" >> /etc/passwd
+#RUN echo "aibiz:x:1000:" >> /etc/group
+#RUN mkdir -p /home/aibiz
+#RUN chown -R aibiz:aibiz /home/aibiz
+#USER aibiz

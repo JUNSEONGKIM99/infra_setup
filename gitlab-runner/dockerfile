@@ -1,0 +1,9 @@
+# 이미지 생성
+FROM gitlab/gitlab-runner:alpine3.21-ce9c4eb3
+USER root
+
+# 필수 패키지 설치
+RUN apk add --no-cache openjdk17
+
+# gitlab-runner 사용자로 실행
+#USER gitlab-runner
