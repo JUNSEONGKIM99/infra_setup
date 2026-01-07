@@ -272,4 +272,4 @@ Certbot 로그를 확인하고 도메인 DNS 설정 및 포트 80/443 접근성�
 ## 연락처
 
 - Author: jskim
-- Email: junseong.kim.ecd@gmali.com
+- Email: junseong.kim.ece@gmali.com
